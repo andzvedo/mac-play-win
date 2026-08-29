@@ -1,0 +1,109 @@
+import { useEffect, useState } from "react";
+import { RuntimeBanner } from "@/components/runtime-banner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { usePonte } from "@/context/ponte-context";
+import { Badge } from "@/components/ui/badge";
+
+export function SettingsPage() {
+  const { settings, runtimes, foundRuntimes, saveSettings, actionError } = usePonte();
+  const [customWinePath, setCustomWinePath] = useState(settings.customWinePath);
+  const [prefixesDir, setPrefixesDir] = useState(settings.prefixesDir);
+  const [metalHud, setMetalHud] = useState(settings.metalHud);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    setCustomWinePath(settings.customWinePath);
+    setPrefixesDir(settings.prefixesDir);
+    setMetalHud(settings.metalHud);
+  }, [settings]);
+
+  async function handleSave(event: React.FormEvent) {
+    event.preventDefault();
+    await saveSettings({ customWinePath, prefixesDir, metalHud });
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 2000);
+  }
+
+  return (
+    <form onSubmit={(event) => void handleSave(event)} className="mx-auto flex max-w-2xl flex-col gap-6">
+      <div className="space-y-1">
+        <h1 className="font-heading text-2xl font-semibold">Ajustes</h1>
+        <p className="text-sm text-muted-foreground">
+          O Ponte não empacota Wine nem D3DMetal. Ele só detecta o que já está no
+          Mac e dispara o .exe local.
+        </p>
+      </div>
+
+      <RuntimeBanner foundCount={foundRuntimes.length} />
+
+      <section className="space-y-3">
+        <h2 className="font-heading text-sm font-medium">Motores detectados</h2>
+        <ul className="grid gap-2">
+          {runtimes.map((runtime) => (
+            <li
+              key={runtime.kind}
+              className="flex flex-col gap-1 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div>
+                <p className="text-sm font-medium">{runtime.label}</p>
+                <p className="break-all text-xs text-muted-foreground">
+                  {runtime.found ? runtime.wine64Path : "Não encontrado"}
+                </p>
+              </div>
+              <Badge variant={runtime.found ? "default" : "secondary"}>
+                {runtime.found ? "Encontrado" : "Ausente"}
+              </Badge>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <div className="grid gap-2">
+        <Label htmlFor="wine-path">Caminho manual do wine64</Label>
+        <Input
+          id="wine-path"
+          value={customWinePath}
+          onChange={(event) => setCustomWinePath(event.target.value)}
+          placeholder="/opt/homebrew/bin/wine64"
+        />
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor="prefix-dir">Pasta de prefixos</Label>
+        <Input
+          id="prefix-dir"
+          value={prefixesDir}
+          onChange={(event) => setPrefixesDir(event.target.value)}
+        />
+        <p className="text-xs text-muted-foreground">
+          Jogos já adicionados mantêm o prefixo antigo. A nova pasta vale para os
+          próximos.
+        </p>
+      </div>
+
+      <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+        <div>
+          <Label htmlFor="hud">HUD Metal</Label>
+          <p className="text-xs text-muted-foreground">
+            Define MTL_HUD_ENABLED no lançamento.
+          </p>
+        </div>
+        <Switch
+          id="hud"
+          checked={metalHud}
+          onCheckedChange={setMetalHud}
+        />
+      </div>
+
+      {actionError ? <p className="text-sm text-destructive">{actionError}</p> : null}
+
+      <div className="flex items-center gap-3">
+        <Button type="submit">Guardar</Button>
+        {saved ? <span className="text-sm text-muted-foreground">Salvo</span> : null}
+      </div>
+    </form>
+  );
+}
