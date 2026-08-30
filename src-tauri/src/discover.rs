@@ -68,6 +68,16 @@ fn discovery_from_exe(exe: &Path) -> Result<GameDiscovery, CommandError> {
             "Escolha a pasta do jogo. O Ponte encontra o .exe.",
         ));
     }
+    if exe
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(is_helper_exe)
+    {
+        return Err(CommandError::new(
+            "invalid_folder",
+            "Este ficheiro não é o jogo. Escolha a pasta do jogo, não um verificador, instalador ou redistributable.",
+        ));
+    }
     let folder = exe.parent().unwrap_or(exe);
     Ok(discovery_from_paths(folder, exe))
 }
@@ -112,6 +122,9 @@ fn skip_dir_name(name: &str) -> bool {
             | "easyanticheat"
             | "battleye"
             | "easyanticheat_eos"
+            | "md5"
+            | "crc"
+            | "sfv"
     )
 }
 
@@ -144,6 +157,13 @@ pub fn is_helper_exe(file_name: &str) -> bool {
         "prereq",
         "ue4prereq",
         "ue5prereq",
+        "quicksfv",
+        "sfv32",
+        "hashcheck",
+        "checksum",
+        "md5summer",
+        "md5checker",
+        "crc32",
     ];
     if NEEDLES.iter().any(|needle| stem.contains(needle)) {
         return true;
@@ -496,6 +516,7 @@ mod tests {
         assert!(is_helper_exe("UnityCrashHandler64.exe"));
         assert!(is_helper_exe("VC_redist.x64.exe"));
         assert!(is_helper_exe("setup.exe"));
+        assert!(is_helper_exe("QuickSFV.EXE"));
         assert!(!is_helper_exe("Hades.exe"));
         assert!(!is_helper_exe("PenguinHotel-Win64-Shipping.exe"));
     }
@@ -509,6 +530,24 @@ mod tests {
         let found = resolve_game_path(&dir.to_string_lossy()).unwrap();
         assert!(found.exe_path.ends_with("REPO.exe"));
         assert_eq!(found.engine_guess, crate::types::EngineGuess::Unity);
+    }
+
+    #[test]
+    fn skips_checksum_tools_like_quicksfv() {
+        let dir = temp_dir("sfv");
+        touch(&dir.join("Hades.exe"));
+        touch(&dir.join("MD5/QuickSFV.EXE"));
+        let found = resolve_game_path(&dir.to_string_lossy()).unwrap();
+        assert!(found.exe_path.ends_with("Hades.exe"));
+    }
+
+    #[test]
+    fn refuses_quicksfv_as_the_game() {
+        let dir = temp_dir("sfv-file");
+        let exe = dir.join("QuickSFV.EXE");
+        touch(&exe);
+        let err = resolve_game_path(&exe.to_string_lossy()).unwrap_err();
+        assert_eq!(err.code, "invalid_folder");
     }
 
     #[test]

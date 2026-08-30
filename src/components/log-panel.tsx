@@ -1,16 +1,45 @@
 import { useEffect, useRef } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  nearestLogViewport,
+  shouldStickLogToEnd,
+  stickLogToEnd,
+} from "@/lib/scroll-log";
 
 export function LogPanel({ lines }: { lines: string[] }) {
   const endRef = useRef<HTMLDivElement>(null);
+  const didStickRef = useRef(false);
+  const lineCount = lines.length;
+  const lastLine = lineCount > 0 ? lines[lineCount - 1] : "";
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [lines]);
+    if (lineCount === 0) {
+      didStickRef.current = false;
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const viewport = nearestLogViewport(endRef.current);
+      if (!viewport) {
+        return;
+      }
+      if (
+        shouldStickLogToEnd(
+          viewport.scrollTop,
+          viewport.scrollHeight,
+          viewport.clientHeight,
+          !didStickRef.current,
+        )
+      ) {
+        stickLogToEnd(viewport);
+        didStickRef.current = true;
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [lineCount, lastLine]);
 
-  if (lines.length === 0) {
+  if (lineCount === 0) {
     return (
-      <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+      <p className="flex h-56 items-center rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
         Sem logs ainda. Inicie o jogo para ver a saída do Wine.
       </p>
     );

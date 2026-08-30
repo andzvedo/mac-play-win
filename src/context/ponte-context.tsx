@@ -9,6 +9,7 @@ import {
 } from "react";
 import { getBackend } from "@/lib/ponte";
 import { isPonteError, toPonteError } from "@/lib/errors";
+import { sameLogLines } from "@/lib/scroll-log";
 import type {
   AddGameInput,
   Game,
@@ -74,8 +75,14 @@ export function PonteProvider({ children }: { children: ReactNode }) {
         backend.getLaunchState(id),
         backend.getLogs(id),
       ]);
-      setLaunch((current) => ({ ...current, [id]: state }));
-      setLogs((current) => ({ ...current, [id]: log.lines }));
+      setLaunch((current) =>
+        current[id] === state ? current : { ...current, [id]: state },
+      );
+      setLogs((current) =>
+        sameLogLines(current[id], log.lines)
+          ? current
+          : { ...current, [id]: log.lines },
+      );
     },
     [backend],
   );

@@ -6,6 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::discover::is_helper_exe;
 use crate::env_backend::env_for_backend;
 use crate::error::CommandError;
 use crate::paths::{is_windows_exe_path, prefix_is_owned};
@@ -648,6 +649,16 @@ pub fn launch_game(
             format!("Ficheiro não encontrado: {}", exe.display()),
         ));
     }
+    if exe
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(is_helper_exe)
+    {
+        return Err(CommandError::new(
+            "invalid_exe",
+            "Este ficheiro não é o jogo. É uma ferramenta auxiliar (verificador, instalador ou redistributable). Adicione de novo a pasta do jogo para o Ponte escolher o .exe certo.",
+        ));
+    }
     let runtime = resolve_wine(&game.runtime_kind).ok_or_else(|| {
         CommandError::new(
             "runtime_missing",
@@ -674,6 +685,9 @@ pub fn launch_game(
     cmd.env("WINEPREFIX", &prefix);
     for (key, value) in env_for_backend(&game.dx_backend, settings.metal_hud) {
         cmd.env(key, value);
+    }
+    if let Some(work_dir) = exe.parent() {
+        cmd.current_dir(work_dir);
     }
     cmd.arg(&exe);
     for arg in game.args.split_whitespace() {

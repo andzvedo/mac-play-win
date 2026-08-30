@@ -53,16 +53,16 @@ export function AppShell({ children }: { children?: ReactNode }) {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="flex min-h-svh bg-background">
-      <aside className="hidden w-60 shrink-0 border-r border-sidebar-border bg-sidebar md:flex md:flex-col">
+    <div className="flex h-full min-h-0 overflow-hidden bg-background">
+      <aside className="hidden h-full w-60 shrink-0 border-r border-sidebar-border bg-sidebar md:flex md:flex-col">
         <Brand />
         <Separator />
-        <div className="p-3">
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
           <NavItems />
         </div>
       </aside>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-2 border-b px-4 py-3 md:hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="flex shrink-0 items-center gap-2 border-b px-4 py-3 md:hidden">
           <Sheet open={open} onOpenChange={setOpen}>
             <SheetTrigger asChild>
               <Button variant="outline" size="icon-sm" aria-label="Abrir menu">
@@ -81,7 +81,9 @@ export function AppShell({ children }: { children?: ReactNode }) {
           </Sheet>
           <span className="font-heading text-sm font-semibold">Ponte</span>
         </header>
-        <main className="min-w-0 flex-1 p-4 md:p-8">{children ?? <Outlet />}</main>
+        <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain [overflow-anchor:none] p-4 md:p-8">
+          {children ?? <Outlet />}
+        </main>
       </div>
     </div>
   );
