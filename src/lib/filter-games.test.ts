@@ -9,6 +9,7 @@ function game(partial: Partial<Game> & Pick<Game, "id" | "name" | "exePath">): G
     dxBackend: "d3dmetal",
     prefixPath: "/tmp/p",
     prefixStatus: "missing",
+    installDir: "",
     createdAt: "0",
     ...partial,
   };

@@ -1,7 +1,8 @@
-import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, LoaderCircle, Play, Square } from "lucide-react";
 import { CompatibilityNotice } from "@/components/compatibility-notice";
+import { GameSetupCard } from "@/components/game-setup-card";
 import { LogPanel } from "@/components/log-panel";
 import {
   AlertDialog,
@@ -27,9 +28,10 @@ import {
 } from "@/components/ui/select";
 import { usePonte } from "@/context/ponte-context";
 import { assertNever } from "@/lib/assert-never";
+import { gameInstallDir } from "@/lib/discover-game";
 import { catalogEntry, dxBackendLabel, runtimeKindLabel } from "@/lib/runtime-catalog";
 import { prefixStatusLabel } from "@/lib/prefix-status";
-import type { DxBackend, LaunchState, RuntimeKind } from "@/lib/types";
+import type { DxBackend, GameSetupPlan, LaunchState, RuntimeKind } from "@/lib/types";
 
 function statusCopy(state: LaunchState): string {
   switch (state) {
@@ -50,6 +52,7 @@ function statusCopy(state: LaunchState): string {
 
 export function GameDetailPage() {
   const { id } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const {
     games,
@@ -60,12 +63,67 @@ export function GameDetailPage() {
     loading,
     updateGame,
     createPrefix,
+    installVcrun,
+    getGameSetup,
+    prepareGame,
     launchGame,
     stopGame,
     removeGame,
+    pickGameFolder,
+    resolveGameFolder,
   } = usePonte();
   const [busy, setBusy] = useState(false);
+  const [plan, setPlan] = useState<GameSetupPlan | null>(null);
   const game = games.find((item) => item.id === id);
+  const shouldPrepare = searchParams.get("preparar") === "1";
+  const autoPrepareRef = useRef(false);
+  const getGameSetupRef = useRef(getGameSetup);
+  getGameSetupRef.current = getGameSetup;
+
+  useEffect(() => {
+    if (!id) {
+      setPlan(null);
+      return;
+    }
+    let cancelled = false;
+    void getGameSetupRef
+      .current(id)
+      .then((next) => {
+        if (!cancelled) {
+          setPlan(next);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPlan(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, game?.prefixStatus, game?.runtimeKind, game?.dxBackend, game?.exePath]);
+
+  useEffect(() => {
+    if (!game || !plan) {
+      return;
+    }
+    if (!shouldPrepare || !plan.canAutoFix || autoPrepareRef.current) {
+      return;
+    }
+    autoPrepareRef.current = true;
+    setSearchParams({}, { replace: true });
+    setBusy(true);
+    void (async () => {
+      try {
+        await prepareGame(game.id);
+        setPlan(await getGameSetup(game.id));
+      } catch {
+        /* mensagem já vai em actionError */
+      } finally {
+        setBusy(false);
+      }
+    })();
+  }, [game, plan, shouldPrepare, setSearchParams, prepareGame, getGameSetup]);
 
   if (!loading && id && !game) {
     return (
@@ -88,7 +146,11 @@ export function GameDetailPage() {
     foundRuntimes.length > 0
       ? foundRuntimes
       : [{ kind: game.runtimeKind, label: runtimeKindLabel(game.runtimeKind) }];
+  const vcrunReady =
+    plan?.items.find((item) => item.id === "vcrun")?.status === "ready";
   const backends = catalogEntry(game.runtimeKind).supportedBackends;
+  const folder = gameInstallDir(game);
+  const selectedGame = game;
 
   async function withBusy(fn: () => Promise<void>) {
     setBusy(true);
@@ -99,6 +161,22 @@ export function GameDetailPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function handleChangeFolder() {
+    const path = await pickGameFolder();
+    if (!path) {
+      return;
+    }
+    await withBusy(async () => {
+      const found = await resolveGameFolder(path);
+      await updateGame({
+        ...selectedGame,
+        exePath: found.exePath,
+        installDir: found.folderPath,
+      });
+      setPlan(await getGameSetup(selectedGame.id));
+    });
   }
 
   return (
@@ -114,8 +192,22 @@ export function GameDetailPage() {
 
       <div className="space-y-1">
         <h1 className="font-heading text-2xl font-semibold">{game.name}</h1>
-        <p className="break-all text-sm text-muted-foreground">{game.exePath}</p>
+        <p className="break-all text-sm text-muted-foreground">{folder}</p>
+        <p className="break-all text-xs text-muted-foreground">
+          Executável: {game.exePath}
+        </p>
         <p className="text-sm">{statusCopy(state)}</p>
+        <div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => void handleChangeFolder()}
+          >
+            Trocar pasta
+          </Button>
+        </div>
       </div>
 
       {actionError ? (
@@ -123,6 +215,19 @@ export function GameDetailPage() {
           <AlertTitle>Falha</AlertTitle>
           <AlertDescription>{actionError}</AlertDescription>
         </Alert>
+      ) : null}
+
+      {plan ? (
+        <GameSetupCard
+          plan={plan}
+          busy={busy}
+          onPrepare={() =>
+            void withBusy(async () => {
+              await prepareGame(game.id);
+              setPlan(await getGameSetup(game.id));
+            })
+          }
+        />
       ) : null}
 
       <div className="flex flex-wrap gap-2">
@@ -154,21 +259,52 @@ export function GameDetailPage() {
             <AlertDialogHeader>
               <AlertDialogTitle>Recriar o prefixo Wine?</AlertDialogTitle>
               <AlertDialogDescription>
-                O Ponte volta a correr wineboot neste prefixo. Dados do Windows
-                dentro dessa pasta podem ser substituídos. O .exe do jogo no disco
-                não é apagado.
+                O Ponte apaga a pasta deste prefixo e volta a correr wineboot
+                (com um limite de 3 minutos). Dados do Windows dentro dessa pasta
+                são perdidos. O .exe do jogo no disco não é apagado.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancelar</AlertDialogCancel>
               <AlertDialogAction
-                onClick={() => void withBusy(() => createPrefix(game.id))}
+                onClick={() => void withBusy(() => createPrefix(game.id, true))}
               >
                 Recriar
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+        {vcrunReady ? (
+          <Button variant="outline" disabled>
+            Visual C++ instalado
+          </Button>
+        ) : (
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="outline" disabled={busy}>
+                Instalar Visual C++
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Instalar Visual C++ neste prefixo?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Muitos jogos pedem o Microsoft Visual C++ 2015-2022. O Ponte
+                  instala uma vez, guarda as DLLs na cache e reutiliza-as nos
+                  outros prefixos.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => void withBusy(() => installVcrun(game.id))}
+                >
+                  Instalar
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        )}
         <AlertDialog>
           <AlertDialogTrigger asChild>
             <Button variant="destructive" disabled={busy}>

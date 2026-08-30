@@ -28,6 +28,14 @@ export const RUNTIME_CATALOG: readonly RuntimeCatalogEntry[] = [
     redistributesD3dmetal: false,
   },
   {
+    kind: "winehq",
+    label: "WineHQ Stable",
+    supportedBackends: ["wined3d", "dxvk"],
+    defaultBackend: "wined3d",
+    installUrl: "https://wiki.winehq.org/MacOS",
+    redistributesD3dmetal: false,
+  },
+  {
     kind: "winecx",
     label: "Wine CX (Gcenx)",
     supportedBackends: ["dxvk", "dxmt", "wined3d"],
@@ -59,12 +67,14 @@ export function catalogEntry(kind: RuntimeKind): RuntimeCatalogEntry {
       return RUNTIME_CATALOG[0];
     case "gcenx_staging":
       return RUNTIME_CATALOG[1];
-    case "winecx":
+    case "winehq":
       return RUNTIME_CATALOG[2];
-    case "crossover":
+    case "winecx":
       return RUNTIME_CATALOG[3];
-    case "custom":
+    case "crossover":
       return RUNTIME_CATALOG[4];
+    case "custom":
+      return RUNTIME_CATALOG[5];
     default:
       return assertNever(kind);
   }

@@ -12,8 +12,11 @@ import { isPonteError, toPonteError } from "@/lib/errors";
 import type {
   AddGameInput,
   Game,
+  GameDiscovery,
+  GameSetupPlan,
   LaunchState,
   Runtime,
+  RuntimeKind,
   Settings,
 } from "@/lib/types";
 import { DEFAULT_PREFIXES_DIR } from "@/lib/types";
@@ -35,7 +38,13 @@ interface PonteContextValue {
   pickExe: () => Promise<string | null>;
   pickWine: () => Promise<string | null>;
   pickDirectory: () => Promise<string | null>;
-  createPrefix: (id: string) => Promise<void>;
+  pickGameFolder: () => Promise<string | null>;
+  resolveGameFolder: (path: string) => Promise<GameDiscovery>;
+  createPrefix: (id: string, wipe?: boolean) => Promise<void>;
+  installVcrun: (id: string) => Promise<void>;
+  getGameSetup: (id: string) => Promise<GameSetupPlan>;
+  prepareGame: (id: string) => Promise<Game>;
+  installRuntime: (kind: RuntimeKind) => Promise<void>;
   launchGame: (id: string) => Promise<void>;
   stopGame: (id: string) => Promise<void>;
   saveSettings: (settings: Settings) => Promise<void>;
@@ -152,11 +161,32 @@ export function PonteProvider({ children }: { children: ReactNode }) {
       pickExe: () => backend.pickExe(),
       pickWine: () => backend.pickWine(),
       pickDirectory: () => backend.pickDirectory(),
-      createPrefix: (id) =>
+      pickGameFolder: () => backend.pickGameFolder(),
+      resolveGameFolder: (path) => backend.resolveGameFolder(path),
+      createPrefix: (id, wipe) =>
         runAction(async () => {
-          await backend.createPrefix(id);
+          await backend.createPrefix(id, wipe);
           await refresh();
           await refreshGameMeta(id);
+        }),
+      installVcrun: (id) =>
+        runAction(async () => {
+          await backend.installVcrun(id);
+          await refreshGameMeta(id);
+        }),
+      getGameSetup: (id) => backend.getGameSetup(id),
+      prepareGame: (id) =>
+        runAction(async () => {
+          setLaunch((current) => ({ ...current, [id]: "starting" }));
+          const game = await backend.prepareGame(id);
+          await refresh();
+          await refreshGameMeta(id);
+          return game;
+        }),
+      installRuntime: (kind) =>
+        runAction(async () => {
+          const next = await backend.installRuntime(kind);
+          setRuntimes(next);
         }),
       launchGame: (id) =>
         runAction(async () => {

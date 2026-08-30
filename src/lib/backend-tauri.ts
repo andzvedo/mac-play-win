@@ -4,10 +4,13 @@ import type { PonteBackend } from "./backend";
 import type {
   AddGameInput,
   Game,
+  GameDiscovery,
   GameLog,
+  GameSetupPlan,
   LaunchState,
   PonteErrorCode,
   Runtime,
+  RuntimeKind,
   Settings,
 } from "./types";
 
@@ -53,7 +56,16 @@ export const tauriPonteBackend: PonteBackend = {
   pickExe: () => call<string | null>("pick_exe"),
   pickWine: () => call<string | null>("pick_wine"),
   pickDirectory: () => call<string | null>("pick_directory"),
-  createPrefix: (gameId) => call<Game>("create_prefix", { gameId }),
+  pickGameFolder: () => call<string | null>("pick_game_folder"),
+  resolveGameFolder: (path: string) =>
+    call<GameDiscovery>("resolve_game_folder", { path }),
+  createPrefix: (gameId, wipe) =>
+    call<Game>("create_prefix", { gameId, wipe: wipe ?? false }),
+  installVcrun: (gameId) => call<void>("install_vcrun", { gameId }),
+  getGameSetup: (gameId) => call<GameSetupPlan>("get_game_setup", { id: gameId }),
+  prepareGame: (gameId) => call<Game>("prepare_game", { gameId }),
+  installRuntime: (kind: RuntimeKind) =>
+    call<Runtime[]>("install_runtime", { kind }),
   launchGame: (gameId) => call<void>("launch_game", { gameId }),
   stopGame: (gameId) => call<void>("stop_game", { gameId }),
   getLogs: (gameId) => call<GameLog>("get_logs", { gameId }),

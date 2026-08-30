@@ -1,16 +1,47 @@
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+use std::fs;
+use std::io::{BufRead, BufReader, Read};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::env_backend::env_for_backend;
 use crate::error::CommandError;
+use crate::paths::{is_windows_exe_path, prefix_is_owned};
 use crate::runtimes::resolve_wine;
-use crate::storage::{expand_home, read_settings};
-use crate::types::{Game, GameLog, LaunchState};
+use crate::storage::{ensure_ponte_dir, expand_home, read_settings};
+use crate::types::{DxBackend, Game, GameLog, LaunchState};
 
 const LOG_CAP: usize = 500;
+const WINEBOOT_TIMEOUT: Duration = Duration::from_secs(180);
+const VCRUN_TIMEOUT: Duration = Duration::from_secs(300);
+const VCRUN_URL: &str = "https://aka.ms/vs/17/release/vc_redist.x64.exe";
+const VCRUN_DLLS: &[&str] = &[
+    "vcruntime140",
+    "vcruntime140_1",
+    "msvcp140",
+    "msvcp140_1",
+    "msvcp140_2",
+    "concrt140",
+    "vccorlib140",
+];
+const VCRUN_NATIVE_FILES: &[&str] = &[
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "msvcp140.dll",
+];
+const VCRUN_CACHE_FILES: &[&str] = &[
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "msvcp140.dll",
+    "msvcp140_1.dll",
+    "msvcp140_2.dll",
+    "concrt140.dll",
+    "vccorlib140.dll",
+];
+const VCRUN_MARKER: &str = ".ponte-vcrun-2015-x64";
+const WINE_BUILTIN_MARK: &[u8] = b"Wine builtin DLL";
 
 pub struct LaunchRegistry {
     pub processes: Mutex<HashMap<String, Child>>,
@@ -84,6 +115,7 @@ fn reap(registry: &LaunchRegistry, game_id: &str) {
                         game_id,
                         &format!("Processo saiu com código {status}."),
                     );
+                    hint_graphics_failure(registry, game_id);
                 }
             }
             Ok(None) => {}
@@ -93,6 +125,33 @@ fn reap(registry: &LaunchRegistry, game_id: &str) {
                 append_log(registry, game_id, &format!("Falha ao consultar processo: {err}"));
             }
         }
+    }
+}
+
+fn backend_label(backend: &DxBackend) -> &'static str {
+    match backend {
+        DxBackend::D3dmetal => "D3DMetal",
+        DxBackend::Dxmt => "DXMT",
+        DxBackend::Dxvk => "DXVK-macOS",
+        DxBackend::Wined3d => "WineD3D",
+    }
+}
+
+fn hint_graphics_failure(registry: &LaunchRegistry, game_id: &str) {
+    const NEEDLE: &str = "wined3d_select_feature_level";
+    const HINT: &str = "O WineD3D do WineHQ Stable não consegue o DirectX 11 neste Mac. Instale o Wine Staging (Gcenx) ou o Game Porting Toolkit e mude o motor do jogo.";
+    let should_hint = {
+        let logs = registry.logs.lock().expect("logs mutex");
+        match logs.get(game_id) {
+            Some(lines) => {
+                lines.iter().any(|line| line.contains(NEEDLE))
+                    && !lines.iter().any(|line| line.contains("não consegue o DirectX 11"))
+            }
+            None => false,
+        }
+    };
+    if should_hint {
+        append_log(registry, game_id, HINT);
     }
 }
 
@@ -115,7 +174,11 @@ fn pipe_output(registry: Arc<LaunchRegistry>, game_id: String, child: &mut Child
     }
 }
 
-pub fn create_prefix(registry: &LaunchRegistry, game: &Game) -> Result<(), CommandError> {
+pub fn create_prefix(
+    registry: &LaunchRegistry,
+    game: &Game,
+    wipe: bool,
+) -> Result<(), CommandError> {
     let runtime = resolve_wine(&game.runtime_kind).ok_or_else(|| {
         CommandError::new(
             "runtime_missing",
@@ -123,30 +186,444 @@ pub fn create_prefix(registry: &LaunchRegistry, game: &Game) -> Result<(), Comma
         )
     })?;
     let prefix = expand_home(&game.prefix_path);
+    if wipe {
+        let settings = read_settings()?;
+        let prefixes_dir = expand_home(&settings.prefixes_dir);
+        if !prefix_is_owned(&prefix, &prefixes_dir, &game.id) {
+            return Err(CommandError::new(
+                "prefix_failed",
+                "O prefixo está fora da pasta do Ponte; recusar apagar.",
+            ));
+        }
+        if prefix.exists() {
+            append_log(registry, &game.id, "A apagar o prefixo anterior.");
+            std::fs::remove_dir_all(&prefix).map_err(|err| {
+                CommandError::new(
+                    "prefix_failed",
+                    format!("Não foi possível apagar o prefixo: {err}"),
+                )
+            })?;
+        }
+    }
     std::fs::create_dir_all(&prefix).ok();
+    run_wineboot(registry, &game.id, &runtime.wine64_path, &prefix)?;
+    append_log(registry, &game.id, "Prefixo pronto.");
+    Ok(())
+}
+
+fn run_wineboot(
+    registry: &LaunchRegistry,
+    game_id: &str,
+    wine64: &str,
+    prefix: &std::path::Path,
+) -> Result<(), CommandError> {
     append_log(
         registry,
-        &game.id,
+        game_id,
         &format!("WINEPREFIX={} wineboot --init", prefix.display()),
     );
-    let output = Command::new(&runtime.wine64_path)
-        .env("WINEPREFIX", &prefix)
+    let mut child = Command::new(wine64)
+        .env("WINEPREFIX", prefix)
         .args(["wineboot", "--init"])
-        .output()
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|err| {
             CommandError::new("prefix_failed", format!("wineboot falhou: {err}"))
         })?;
-    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let stderr_pipe = child.stderr.take();
+    let stderr_thread = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(mut pipe) = stderr_pipe {
+            let _ = pipe.read_to_string(&mut buf);
+        }
+        buf
+    });
+
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if started.elapsed() >= WINEBOOT_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stderr_thread.join();
+                    return Err(CommandError::new(
+                        "prefix_failed",
+                        "wineboot excedeu 3 minutos e foi interrompido.",
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Err(err) => {
+                return Err(CommandError::new(
+                    "prefix_failed",
+                    format!("Falha ao consultar wineboot: {err}"),
+                ));
+            }
+        }
+    };
+
+    let stderr = stderr_thread.join().unwrap_or_default();
     if !stderr.trim().is_empty() {
-        append_log(registry, &game.id, stderr.trim());
+        append_log(registry, game_id, stderr.trim());
     }
-    if !output.status.success() {
+    if !status.success() {
         return Err(CommandError::new(
             "prefix_failed",
-            format!("wineboot saiu com {}", output.status),
+            format!("wineboot saiu com {status}"),
         ));
     }
-    append_log(registry, &game.id, "Prefixo pronto.");
+    Ok(())
+}
+
+fn vcrun_installer_ok(status: &std::process::ExitStatus) -> bool {
+    match status.code() {
+        Some(0) | Some(3010) => true,
+        _ => status.success(),
+    }
+}
+
+fn dll_is_wine_builtin(path: &Path) -> bool {
+    let Ok(data) = fs::read(path) else {
+        return true;
+    };
+    data.windows(WINE_BUILTIN_MARK.len())
+        .any(|window| window == WINE_BUILTIN_MARK)
+}
+
+fn system32_dir(prefix: &Path) -> PathBuf {
+    prefix.join("drive_c/windows/system32")
+}
+
+fn vcrun_files_present(dir: &Path) -> bool {
+    VCRUN_NATIVE_FILES.iter().all(|name| {
+        let path = dir.join(name);
+        path.is_file() && !dll_is_wine_builtin(&path)
+    })
+}
+
+pub(crate) fn vcrun_is_installed(prefix: &Path) -> bool {
+    vcrun_files_present(&system32_dir(prefix))
+}
+
+pub(crate) fn vcrun_cache_ready() -> bool {
+    vcrun_cache_dir()
+        .map(|dir| vcrun_files_present(&dir))
+        .unwrap_or(false)
+}
+
+fn vcrun_cache_dir() -> Result<PathBuf, CommandError> {
+    let dir = ensure_ponte_dir()?.join("cache/vcrun2015-x64");
+    fs::create_dir_all(&dir).map_err(|err| {
+        CommandError::new(
+            "prefix_failed",
+            format!("Não foi possível criar a cache do Visual C++: {err}"),
+        )
+    })?;
+    Ok(dir)
+}
+
+fn copy_vcrun_dlls(from: &Path, to: &Path) -> bool {
+    let _ = fs::create_dir_all(to);
+    for name in VCRUN_CACHE_FILES {
+        let src = from.join(name);
+        if src.is_file() && !dll_is_wine_builtin(&src) {
+            let _ = fs::copy(&src, to.join(name));
+        }
+    }
+    vcrun_files_present(to)
+}
+
+fn capture_vcrun_to_cache(prefix: &Path) {
+    let Ok(cache) = vcrun_cache_dir() else {
+        return;
+    };
+    let _ = copy_vcrun_dlls(&system32_dir(prefix), &cache);
+}
+
+fn seed_vcrun_from_cache(prefix: &Path) -> bool {
+    let Ok(cache) = vcrun_cache_dir() else {
+        return false;
+    };
+    if !vcrun_files_present(&cache) {
+        return false;
+    }
+    copy_vcrun_dlls(&cache, &system32_dir(prefix))
+}
+
+fn vcrun_marked(prefix: &Path) -> bool {
+    system32_dir(prefix).join(VCRUN_MARKER).is_file()
+}
+
+fn mark_vcrun(prefix: &Path) {
+    let _ = fs::write(system32_dir(prefix).join(VCRUN_MARKER), b"microsoft-vcrun-2015-2022\n");
+}
+
+fn clear_vcrun_stub_registry(wine64: &str, prefix: &Path) {
+    for key in [
+        r"HKLM\Software\Microsoft\VisualStudio\14.0\VC\Runtimes\X64",
+        r"HKLM\Software\Wow6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\X64",
+        r"HKLM\Software\Microsoft\VisualStudio\14.0\VC\Runtimes\x64",
+    ] {
+        let _ = Command::new(wine64)
+            .env("WINEPREFIX", prefix)
+            .env("WINEDEBUG", "-all")
+            .args(["reg", "delete", key, "/f"])
+            .status();
+    }
+}
+
+fn run_vcrun_installer(
+    registry: &LaunchRegistry,
+    game_id: &str,
+    wine64: &str,
+    prefix: &Path,
+    installer: &Path,
+    extra_args: &[&str],
+) -> Result<std::process::ExitStatus, CommandError> {
+    let mut command = Command::new(wine64);
+    command
+        .env("WINEPREFIX", prefix)
+        .env("WINEDEBUG", "-all")
+        .env("WINEDLLOVERRIDES", "winemenubuilder.exe=d")
+        .arg(installer)
+        .args(extra_args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let child = command.spawn().map_err(|err| {
+        CommandError::new(
+            "prefix_failed",
+            format!("Falha ao iniciar o instalador do Visual C++: {err}"),
+        )
+    })?;
+    wait_child(
+        registry,
+        game_id,
+        child,
+        VCRUN_TIMEOUT,
+        "O instalador do Visual C++ excedeu 5 minutos e foi interrompido.",
+    )
+}
+
+fn apply_vcrun_overrides(wine64: &str, prefix: &std::path::Path) {
+    for dll in VCRUN_DLLS {
+        let _ = Command::new(wine64)
+            .env("WINEPREFIX", prefix)
+            .args([
+                "reg",
+                "add",
+                r"HKCU\Software\Wine\DllOverrides",
+                "/v",
+                dll,
+                "/d",
+                "native,builtin",
+                "/f",
+            ])
+            .status();
+    }
+}
+
+fn ensure_vcrun_installer(
+    registry: &LaunchRegistry,
+    game_id: &str,
+) -> Result<std::path::PathBuf, CommandError> {
+    let cache = ensure_ponte_dir()?.join("cache");
+    std::fs::create_dir_all(&cache).map_err(|err| {
+        CommandError::new(
+            "prefix_failed",
+            format!("Não foi possível criar a pasta de cache: {err}"),
+        )
+    })?;
+    let dest = cache.join("vc_redist.x64.exe");
+    if dest.is_file() {
+        if let Ok(meta) = dest.metadata() {
+            if meta.len() > 1_000_000 {
+                return Ok(dest);
+            }
+        }
+    }
+    append_log(
+        registry,
+        game_id,
+        "A descarregar Visual C++ 2015-2022 (Microsoft)…",
+    );
+    let dest_str = dest.to_string_lossy().into_owned();
+    let status = Command::new("curl")
+        .args(["-fsSL", "--retry", "3", "-o", &dest_str, VCRUN_URL])
+        .status()
+        .map_err(|err| {
+            CommandError::new(
+                "prefix_failed",
+                format!("Falha ao descarregar o Visual C++: {err}"),
+            )
+        })?;
+    if !status.success() || !dest.is_file() {
+        return Err(CommandError::new(
+            "prefix_failed",
+            "Não foi possível descarregar o Visual C++ da Microsoft.",
+        ));
+    }
+    Ok(dest)
+}
+
+fn wait_child(
+    registry: &LaunchRegistry,
+    game_id: &str,
+    mut child: Child,
+    timeout: Duration,
+    timeout_message: &str,
+) -> Result<std::process::ExitStatus, CommandError> {
+    let stderr_pipe = child.stderr.take();
+    let stderr_thread = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(mut pipe) = stderr_pipe {
+            let _ = pipe.read_to_string(&mut buf);
+        }
+        buf
+    });
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if started.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stderr_thread.join();
+                    return Err(CommandError::new("prefix_failed", timeout_message));
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Err(err) => {
+                return Err(CommandError::new(
+                    "prefix_failed",
+                    format!("Falha ao consultar o processo: {err}"),
+                ));
+            }
+        }
+    };
+    let stderr = stderr_thread.join().unwrap_or_default();
+    if !stderr.trim().is_empty() {
+        append_log(registry, game_id, stderr.trim());
+    }
+    Ok(status)
+}
+
+pub fn install_vcrun(registry: &LaunchRegistry, game: &Game) -> Result<(), CommandError> {
+    let has_child = registry
+        .processes
+        .lock()
+        .expect("process mutex")
+        .contains_key(&game.id);
+    if has_child {
+        let _ = stop_game(registry, &game.id);
+    }
+    let runtime = resolve_wine(&game.runtime_kind).ok_or_else(|| {
+        CommandError::new(
+            "runtime_missing",
+            "Nenhum wine64 encontrado para instalar o Visual C++.",
+        )
+    })?;
+    let prefix = expand_home(&game.prefix_path);
+    fs::create_dir_all(&prefix).ok();
+    if vcrun_is_installed(&prefix) {
+        capture_vcrun_to_cache(&prefix);
+        if !vcrun_marked(&prefix) {
+            apply_vcrun_overrides(&runtime.wine64_path, &prefix);
+            mark_vcrun(&prefix);
+        }
+        append_log(
+            registry,
+            &game.id,
+            "Visual C++ nativo já está neste prefixo. Nada a instalar.",
+        );
+        return Ok(());
+    }
+    if seed_vcrun_from_cache(&prefix) {
+        apply_vcrun_overrides(&runtime.wine64_path, &prefix);
+        mark_vcrun(&prefix);
+        append_log(
+            registry,
+            &game.id,
+            "Visual C++ copiado da cache do Ponte. O instalador da Microsoft não corre outra vez.",
+        );
+        return Ok(());
+    }
+    append_log(
+        registry,
+        &game.id,
+        "O prefixo ainda não tem o Visual C++ oficial da Microsoft (as DLLs do Wine não chegam).",
+    );
+    clear_vcrun_stub_registry(&runtime.wine64_path, &prefix);
+    let installer = ensure_vcrun_installer(registry, &game.id)?;
+    append_log(
+        registry,
+        &game.id,
+        "A instalar Microsoft Visual C++ 2015-2022 (x64) neste prefixo…",
+    );
+    let status = run_vcrun_installer(
+        registry,
+        &game.id,
+        &runtime.wine64_path,
+        &prefix,
+        &installer,
+        &["/install", "/quiet", "/norestart"],
+    )?;
+    if !vcrun_is_installed(&prefix) && status.code() == Some(1638) {
+        append_log(
+            registry,
+            &game.id,
+            "O instalador achou que o runtime já existia (falso). A desinstalar o stub e a repetir…",
+        );
+        let _ = run_vcrun_installer(
+            registry,
+            &game.id,
+            &runtime.wine64_path,
+            &prefix,
+            &installer,
+            &["/uninstall", "/quiet", "/norestart"],
+        );
+        clear_vcrun_stub_registry(&runtime.wine64_path, &prefix);
+        let _ = run_vcrun_installer(
+            registry,
+            &game.id,
+            &runtime.wine64_path,
+            &prefix,
+            &installer,
+            &["/install", "/quiet", "/norestart"],
+        );
+    } else if !vcrun_is_installed(&prefix) && vcrun_installer_ok(&status) {
+        append_log(
+            registry,
+            &game.id,
+            "O instalador saiu bem, mas as DLLs nativas não apareceram. A tentar /repair…",
+        );
+        let _ = run_vcrun_installer(
+            registry,
+            &game.id,
+            &runtime.wine64_path,
+            &prefix,
+            &installer,
+            &["/repair", "/quiet", "/norestart"],
+        );
+    }
+    if !vcrun_is_installed(&prefix) {
+        return Err(CommandError::new(
+            "prefix_failed",
+            "O Visual C++ oficial não ficou neste prefixo. As DLLs continuam a ser as do Wine. Tente de novo em Instalar Visual C++.",
+        ));
+    }
+    apply_vcrun_overrides(&runtime.wine64_path, &prefix);
+    capture_vcrun_to_cache(&prefix);
+    mark_vcrun(&prefix);
+    append_log(
+        registry,
+        &game.id,
+        "Visual C++ nativo instalado e guardado na cache. Os próximos prefixos reutilizam estas DLLs.",
+    );
     Ok(())
 }
 
@@ -158,8 +635,11 @@ pub fn launch_game(
     if matches!(state, LaunchState::Running | LaunchState::Starting) {
         return Ok(());
     }
-    if game.exe_path.trim().is_empty() {
-        return Err(CommandError::new("invalid_exe", "Caminho do .exe está vazio."));
+    if game.exe_path.trim().is_empty() || !is_windows_exe_path(&game.exe_path) {
+        return Err(CommandError::new(
+            "invalid_exe",
+            "O caminho deve apontar para um ficheiro .exe.",
+        ));
     }
     let exe = expand_home(&game.exe_path);
     if !exe.is_file() {
@@ -183,6 +663,11 @@ pub fn launch_game(
         registry.as_ref(),
         &game.id,
         &format!("Motor: {} ({})", runtime.label, runtime.wine64_path),
+    );
+    append_log(
+        registry.as_ref(),
+        &game.id,
+        &format!("Backend: {}", backend_label(&game.dx_backend)),
     );
 
     let mut cmd = Command::new(&runtime.wine64_path);
@@ -247,5 +732,66 @@ pub fn logs_for(registry: &LaunchRegistry, game_id: &str) -> GameLog {
         game_id: game_id.to_string(),
         lines,
         updated_at: now_stamp(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{vcrun_installer_ok, vcrun_is_installed};
+    use std::fs;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    fn status_from_code(code: i32) -> ExitStatus {
+        ExitStatus::from_raw(code << 8)
+    }
+
+    #[test]
+    fn vcrun_unix_exit_0_is_ok_and_1_is_not() {
+        assert!(vcrun_installer_ok(&status_from_code(0)));
+        assert!(!vcrun_installer_ok(&status_from_code(1)));
+        assert!(!vcrun_installer_ok(&status_from_code(1638)));
+    }
+
+    #[test]
+    fn wine_builtin_dlls_do_not_count_as_vcrun() {
+        let dir = std::env::temp_dir().join(format!(
+            "ponte-vcrun-builtin-{}",
+            std::process::id()
+        ));
+        let system32 = dir.join("drive_c/windows/system32");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&system32).unwrap();
+        for name in ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"] {
+            fs::write(system32.join(name), b"header Wine builtin DLL tail").unwrap();
+        }
+        assert!(!vcrun_is_installed(&dir));
+        fs::write(system32.join("vcruntime140.dll"), b"Microsoft Visual C++").unwrap();
+        fs::write(system32.join("vcruntime140_1.dll"), b"Microsoft Visual C++").unwrap();
+        fs::write(system32.join("msvcp140.dll"), b"Microsoft Visual C++").unwrap();
+        assert!(vcrun_is_installed(&dir));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copies_native_vcrun_dlls_between_prefixes() {
+        let from = std::env::temp_dir().join(format!(
+            "ponte-vcrun-from-{}",
+            std::process::id()
+        ));
+        let to = std::env::temp_dir().join(format!(
+            "ponte-vcrun-to-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&from);
+        let _ = fs::remove_dir_all(&to);
+        fs::create_dir_all(&from).unwrap();
+        for name in ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"] {
+            fs::write(from.join(name), b"Microsoft Visual C++").unwrap();
+        }
+        assert!(super::copy_vcrun_dlls(&from, &to.join("drive_c/windows/system32")));
+        assert!(vcrun_is_installed(&to));
+        let _ = fs::remove_dir_all(&from);
+        let _ = fs::remove_dir_all(&to);
     }
 }

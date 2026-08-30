@@ -1,6 +1,7 @@
 export type RuntimeKind =
   | "gptk"
   | "gcenx_staging"
+  | "winehq"
   | "winecx"
   | "crossover"
   | "custom";
@@ -21,8 +22,31 @@ export type PonteErrorCode =
   | "prefix_failed"
   | "launch_failed"
   | "invalid_exe"
+  | "invalid_folder"
   | "not_found"
+  | "setup_failed"
   | "unknown";
+
+export type EngineGuess = "unity" | "unreal" | "unknown";
+
+export type SetupItemStatus = "ready" | "missing" | "installable" | "manual";
+
+export interface SetupItem {
+  id: string;
+  label: string;
+  status: SetupItemStatus;
+  detail: string;
+}
+
+export interface GameSetupPlan {
+  gameId: string;
+  engineGuess: EngineGuess;
+  recommendedRuntime: RuntimeKind;
+  recommendedBackend: DxBackend;
+  items: SetupItem[];
+  canAutoFix: boolean;
+  summary: string;
+}
 
 export interface Runtime {
   kind: RuntimeKind;
@@ -37,6 +61,7 @@ export interface Game {
   id: string;
   name: string;
   exePath: string;
+  installDir: string;
   args: string;
   runtimeKind: RuntimeKind;
   dxBackend: DxBackend;
@@ -58,12 +83,19 @@ export interface GameLog {
   updatedAt: string;
 }
 
+export interface GameDiscovery {
+  folderPath: string;
+  exePath: string;
+  suggestedName: string;
+  engineGuess: EngineGuess;
+  recommendedRuntime: RuntimeKind;
+  recommendedBackend: DxBackend;
+}
+
 export interface AddGameInput {
   name: string;
-  exePath: string;
+  folderPath: string;
   args: string;
-  runtimeKind: RuntimeKind;
-  dxBackend: DxBackend;
 }
 
 export interface LibraryFile {

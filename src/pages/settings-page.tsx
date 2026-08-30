@@ -8,7 +8,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { usePonte } from "@/context/ponte-context";
+import { runtimeCanAutoInstall } from "@/lib/game-setup";
 import { isTauri } from "@/lib/ponte";
+import type { RuntimeKind } from "@/lib/types";
 
 export function SettingsPage() {
   const {
@@ -19,7 +21,9 @@ export function SettingsPage() {
     actionError,
     pickWine,
     pickDirectory,
+    installRuntime,
   } = usePonte();
+  const [installing, setInstalling] = useState<RuntimeKind | null>(null);
   const [customWinePath, setCustomWinePath] = useState(settings.customWinePath);
   const [prefixesDir, setPrefixesDir] = useState(settings.prefixesDir);
   const [metalHud, setMetalHud] = useState(settings.metalHud);
@@ -76,8 +80,9 @@ export function SettingsPage() {
       <div className="space-y-1">
         <h1 className="font-heading text-2xl font-semibold">Ajustes</h1>
         <p className="text-sm text-muted-foreground">
-          O Ponte não empacota Wine nem D3DMetal. Ele só detecta o que já está no
-          Mac e dispara o .exe local.
+          O Ponte não empacota Wine nem D3DMetal. Ele detecta o que já está no
+          Mac, instala o Wine Staging via Homebrew se faltar, e dispara o .exe
+          local.
         </p>
       </div>
 
@@ -97,16 +102,40 @@ export function SettingsPage() {
                   {runtime.found ? runtime.wine64Path : "Não encontrado"}
                 </p>
               </div>
-              <Badge variant={runtime.found ? "default" : "secondary"}>
-                {runtime.found ? "Encontrado" : "Ausente"}
-              </Badge>
+              <div className="flex items-center gap-2">
+                {!runtime.found && runtimeCanAutoInstall(runtime.kind) ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={installing !== null}
+                    onClick={() => {
+                      void (async () => {
+                        setInstalling(runtime.kind);
+                        try {
+                          await installRuntime(runtime.kind);
+                        } catch {
+                          /* mensagem já vai em actionError */
+                        } finally {
+                          setInstalling(null);
+                        }
+                      })();
+                    }}
+                  >
+                    {installing === runtime.kind ? "A instalar…" : "Instalar"}
+                  </Button>
+                ) : null}
+                <Badge variant={runtime.found ? "default" : "secondary"}>
+                  {runtime.found ? "Encontrado" : "Ausente"}
+                </Badge>
+              </div>
             </li>
           ))}
         </ul>
       </section>
 
       <div className="grid gap-2">
-        <Label htmlFor="wine-path">Caminho manual do wine64</Label>
+        <Label htmlFor="wine-path">Caminho manual do Wine</Label>
         <div className="flex gap-2">
           <Input
             id="wine-path"
@@ -116,7 +145,7 @@ export function SettingsPage() {
               markDirty();
               setCustomWinePath(event.target.value);
             }}
-            placeholder="/opt/homebrew/bin/wine64"
+            placeholder="/opt/homebrew/bin/wine"
           />
           <Button type="button" variant="outline" onClick={() => void chooseWine()}>
             Escolher

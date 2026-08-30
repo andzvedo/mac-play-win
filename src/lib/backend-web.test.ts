@@ -50,14 +50,17 @@ describe("WebPonteBackend", () => {
     vi.useFakeTimers();
     const backend = new WebPonteBackend();
     const addPromise = backend.addGame({
-      name: "Hades",
-      exePath: "/Games/Hades/Hades.exe",
+      name: "",
+      folderPath: "/Games/Hades",
       args: "",
-      runtimeKind: "gptk",
-      dxBackend: "d3dmetal",
     });
     const game = await addPromise;
     expect(game.id).toBe("game-test-id");
+    expect(game.name).toBe("Hades");
+    expect(game.exePath).toBe("/Games/Hades/Hades.exe");
+    expect(game.installDir).toBe("/Games/Hades");
+    expect(game.runtimeKind).toBe("gptk");
+    expect(game.dxBackend).toBe("d3dmetal");
     expect(game.prefixStatus).toBe("missing");
     expect(game.prefixPath).toContain("game-test-id");
 
@@ -67,17 +70,73 @@ describe("WebPonteBackend", () => {
     expect(ready.prefixStatus).toBe("ready");
   });
 
-  it("recusa lançar sem caminho de exe", async () => {
+  it("recusa adicionar sem pasta", async () => {
     const backend = new WebPonteBackend();
     await expect(
       backend.addGame({
         name: "",
-        exePath: "",
+        folderPath: "",
         args: "",
-        runtimeKind: "gptk",
-        dxBackend: "d3dmetal",
       }),
     ).rejects.toBeInstanceOf(PonteError);
+  });
+
+  it("recusa um ficheiro que não é pasta de jogo", async () => {
+    const backend = new WebPonteBackend();
+    await expect(
+      backend.addGame({
+        name: "",
+        folderPath: "/Games/Hades/Hades.app",
+        args: "",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_folder" });
+  });
+
+  it("recusa lançar um jogo cujo caminho deixou de ser .exe", async () => {
+    const backend = new WebPonteBackend();
+    const game = await backend.addGame({
+      name: "",
+      folderPath: "/Games/Hades",
+      args: "",
+    });
+    await backend.updateGame({ ...game, exePath: "/Games/Hades/Hades.app" });
+    await expect(backend.launchGame(game.id)).rejects.toMatchObject({
+      code: "invalid_exe",
+    });
+  });
+
+  it("recriar prefixo regista o wipe simulado", async () => {
+    vi.useFakeTimers();
+    const backend = new WebPonteBackend();
+    const game = await backend.addGame({
+      name: "",
+      folderPath: "/Games/Hades",
+      args: "",
+    });
+    const prefixPromise = backend.createPrefix(game.id, true);
+    await vi.runAllTimersAsync();
+    await prefixPromise;
+    const log = await backend.getLogs(game.id);
+    expect(log.lines.some((line) => line.includes("apagar o prefixo"))).toBe(
+      true,
+    );
+  });
+
+  it("simula a instalação do Visual C++ no prefixo", async () => {
+    vi.useFakeTimers();
+    const backend = new WebPonteBackend();
+    const game = await backend.addGame({
+      name: "",
+      folderPath: "/Games/Hades",
+      args: "",
+    });
+    const installPromise = backend.installVcrun(game.id);
+    await vi.runAllTimersAsync();
+    await installPromise;
+    const log = await backend.getLogs(game.id);
+    expect(
+      log.lines.some((line) => line.includes("Visual C++ instalado (simulado)")),
+    ).toBe(true);
   });
 
   it("persiste ajustes", async () => {
@@ -95,6 +154,42 @@ describe("WebPonteBackend", () => {
     );
   });
 
+  it("prepara o jogo no mock e marca o plano como pronto", async () => {
+    vi.useFakeTimers();
+    const backend = new WebPonteBackend();
+    const game = await backend.addGame({
+      name: "",
+      folderPath: "/Games/Hades",
+      args: "",
+    });
+    const before = await backend.getGameSetup(game.id);
+    expect(before.canAutoFix).toBe(true);
+    const preparePromise = backend.prepareGame(game.id);
+    await vi.runAllTimersAsync();
+    const prepared = await preparePromise;
+    expect(prepared.dxBackend).toBe("dxvk");
+    expect(prepared.prefixStatus).toBe("ready");
+    const after = await backend.getGameSetup(game.id);
+    expect(after.canAutoFix).toBe(false);
+    expect(after.items.every((item) => item.status === "ready")).toBe(true);
+
+    const again = backend.prepareGame(game.id);
+    await vi.runAllTimersAsync();
+    await again;
+    await backend.installVcrun(game.id);
+    const log = await backend.getLogs(game.id);
+    expect(
+      log.lines.filter((line) => line.includes("Visual C++ instalado (simulado)"))
+        .length,
+    ).toBe(1);
+    expect(
+      log.lines.some((line) => line.includes("Já estava tudo instalado")),
+    ).toBe(true);
+    expect(
+      log.lines.some((line) => line.includes("Nada a instalar")),
+    ).toBe(true);
+  });
+
   it("detecta GPTK e Gcenx no mock e deixa winecx ausente", async () => {
     const backend = new WebPonteBackend();
     const runtimes = await backend.detectRuntimes();
@@ -102,5 +197,6 @@ describe("WebPonteBackend", () => {
     expect(found).toContain("gptk");
     expect(found).toContain("gcenx_staging");
     expect(runtimes.find((item) => item.kind === "winecx")?.found).toBe(false);
+    expect(runtimes.find((item) => item.kind === "winehq")?.found).toBe(false);
   });
 });

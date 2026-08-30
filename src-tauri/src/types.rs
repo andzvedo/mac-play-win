@@ -1,16 +1,17 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeKind {
     Gptk,
     GcenxStaging,
+    Winehq,
     Winecx,
     Crossover,
     Custom,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DxBackend {
     D3dmetal,
@@ -54,6 +55,8 @@ pub struct Game {
     pub id: String,
     pub name: String,
     pub exe_path: String,
+    #[serde(default)]
+    pub install_dir: String,
     pub args: String,
     pub runtime_kind: RuntimeKind,
     pub dx_backend: DxBackend,
@@ -80,14 +83,61 @@ pub struct GameLog {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EngineGuess {
+    Unity,
+    Unreal,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SetupItemStatus {
+    Ready,
+    Missing,
+    Installable,
+    Manual,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupItem {
+    pub id: String,
+    pub label: String,
+    pub status: SetupItemStatus,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameSetupPlan {
+    pub game_id: String,
+    pub engine_guess: EngineGuess,
+    pub recommended_runtime: RuntimeKind,
+    pub recommended_backend: DxBackend,
+    pub items: Vec<SetupItem>,
+    pub can_auto_fix: bool,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameDiscovery {
+    pub folder_path: String,
+    pub exe_path: String,
+    pub suggested_name: String,
+    pub engine_guess: EngineGuess,
+    pub recommended_runtime: RuntimeKind,
+    pub recommended_backend: DxBackend,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddGameInput {
     pub name: String,
-    pub exe_path: String,
+    pub folder_path: String,
     pub args: String,
-    pub runtime_kind: RuntimeKind,
-    pub dx_backend: DxBackend,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

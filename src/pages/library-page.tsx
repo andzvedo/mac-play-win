@@ -23,8 +23,8 @@ export function LibraryPage() {
             Biblioteca
           </h1>
           <p className="max-w-xl text-sm text-muted-foreground">
-            Jogos Windows que já estão no disco. O Ponte cria um prefixo Wine e
-            dispara o .exe com o motor que você escolher.
+            Jogos Windows que já estão no disco. Escolha a pasta do título; o
+            Ponte encontra o .exe, cria o prefixo Wine e instala o que faltar.
           </p>
         </div>
         <Button onClick={() => setOpen(true)}>
@@ -54,9 +54,10 @@ export function LibraryPage() {
           <div className="space-y-2">
             <h2 className="font-heading text-lg font-medium">Nenhum jogo ainda</h2>
             <p className="max-w-lg text-sm text-muted-foreground">
-              Adicione um .exe local — pasta do jogo, instalador ou cópia Steam/GOG
-              que você comprou. É preciso um wine64 no Mac (GPTK ou Gcenx). O Ponte
-              não é emulador, loja nem garantia de que o título abre.
+              Adicione a pasta de um jogo local — cópia Steam/GOG, instalador já
+              extraído ou dump que você comprou. O Ponte encontra o .exe e, se
+              faltar Wine, instala o Staging via Homebrew. Não é emulador, loja
+              nem garantia de que o título abre.
             </p>
           </div>
           <Button onClick={() => setOpen(true)}>Adicionar jogo</Button>

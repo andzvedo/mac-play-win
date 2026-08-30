@@ -10,6 +10,7 @@ export function filterGames(games: Game[], query: string): Game[] {
     const haystack = [
       game.name,
       game.exePath,
+      game.installDir,
       runtimeKindLabel(game.runtimeKind),
       dxBackendLabel(game.dxBackend),
     ]

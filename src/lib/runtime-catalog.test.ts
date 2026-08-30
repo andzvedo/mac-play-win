@@ -7,6 +7,7 @@ describe("runtime-catalog", () => {
     const kinds: RuntimeKind[] = [
       "gptk",
       "gcenx_staging",
+      "winehq",
       "winecx",
       "crossover",
       "custom",

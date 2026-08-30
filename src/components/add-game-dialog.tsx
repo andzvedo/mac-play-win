@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { FolderOpen } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,86 +12,116 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { usePonte } from "@/context/ponte-context";
+import { engineGuessLabel } from "@/lib/game-setup";
 import { isPonteError } from "@/lib/errors";
-import { catalogEntry, dxBackendLabel } from "@/lib/runtime-catalog";
 import { isTauri } from "@/lib/ponte";
-import type { DxBackend, RuntimeKind } from "@/lib/types";
+import { dxBackendLabel, runtimeKindLabel } from "@/lib/runtime-catalog";
+import type { GameDiscovery } from "@/lib/types";
 
 interface AddGameDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-export function AddGameDialog({ open, onOpenChange }: AddGameDialogProps) {
-  const { foundRuntimes, addGame, pickExe } = usePonte();
-  const navigate = useNavigate();
-  const defaultRuntime = foundRuntimes[0]?.kind ?? "gptk";
-  const [name, setName] = useState("");
-  const [exePath, setExePath] = useState("");
-  const [args, setArgs] = useState("");
-  const [runtimeKind, setRuntimeKind] = useState<RuntimeKind>(defaultRuntime);
-  const [dxBackend, setDxBackend] = useState<DxBackend>(
-    catalogEntry(defaultRuntime).defaultBackend,
+function DiscoverySummary({ discovery }: { discovery: GameDiscovery }) {
+  return (
+    <dl className="grid gap-2 rounded-lg border p-3 text-sm">
+      <div className="grid gap-0.5">
+        <dt className="text-xs text-muted-foreground">Nome</dt>
+        <dd className="font-medium">{discovery.suggestedName}</dd>
+      </div>
+      <div className="grid gap-0.5">
+        <dt className="text-xs text-muted-foreground">Executável</dt>
+        <dd className="break-all text-xs text-muted-foreground">{discovery.exePath}</dd>
+      </div>
+      <div className="grid gap-0.5 sm:grid-cols-2 sm:gap-3">
+        <div>
+          <dt className="text-xs text-muted-foreground">Motor do jogo</dt>
+          <dd>{engineGuessLabel(discovery.engineGuess)}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Wine e DirectX</dt>
+          <dd>
+            {runtimeKindLabel(discovery.recommendedRuntime)} +{" "}
+            {dxBackendLabel(discovery.recommendedBackend)}
+          </dd>
+        </div>
+      </div>
+    </dl>
   );
+}
+
+export function AddGameDialog({ open, onOpenChange }: AddGameDialogProps) {
+  const { addGame, pickGameFolder, resolveGameFolder } = usePonte();
+  const navigate = useNavigate();
+  const [folderPath, setFolderPath] = useState("");
+  const [discovery, setDiscovery] = useState<GameDiscovery | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const exeInputRef = useRef<HTMLInputElement>(null);
+  const [resolving, setResolving] = useState(false);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) {
       return;
     }
-    const kind = foundRuntimes[0]?.kind ?? "gptk";
-    setName("");
-    setExePath("");
-    setArgs("");
-    setRuntimeKind(kind);
-    setDxBackend(catalogEntry(kind).defaultBackend);
+    setFolderPath("");
+    setDiscovery(null);
     setError(null);
-  }, [open, foundRuntimes]);
+  }, [open]);
 
-  const supported = catalogEntry(runtimeKind).supportedBackends;
-  const motorOptions =
-    foundRuntimes.length > 0
-      ? foundRuntimes.map((runtime) => ({
-          kind: runtime.kind,
-          label: runtime.label,
-        }))
-      : [{ kind: "gptk" as const, label: catalogEntry("gptk").label }];
+  async function applyFolder(path: string) {
+    const trimmed = path.trim();
+    setFolderPath(trimmed);
+    if (!trimmed) {
+      setDiscovery(null);
+      return;
+    }
+    setResolving(true);
+    setError(null);
+    try {
+      const found = await resolveGameFolder(trimmed);
+      setDiscovery(found);
+    } catch (err) {
+      setDiscovery(null);
+      setError(
+        isPonteError(err)
+          ? err.message
+          : "Não foi possível encontrar o jogo nesta pasta.",
+      );
+    } finally {
+      setResolving(false);
+    }
+  }
 
   async function handlePick() {
-    const path = await pickExe();
+    const path = await pickGameFolder();
     if (path) {
-      setExePath(path);
+      await applyFolder(path);
       return;
     }
     if (!isTauri()) {
-      exeInputRef.current?.focus();
+      folderInputRef.current?.focus();
     }
   }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    setPending(true);
     setError(null);
+    if (!folderPath.trim()) {
+      setError("Escolha a pasta onde o jogo está no disco.");
+      return;
+    }
+    setPending(true);
     try {
       const game = await addGame({
-        name,
-        exePath,
-        args,
-        runtimeKind,
-        dxBackend,
+        name: discovery?.suggestedName ?? "",
+        folderPath,
+        args: "",
       });
       onOpenChange(false);
-      navigate(`/games/${game.id}`);
+      navigate(`/games/${game.id}?preparar=1`);
     } catch (err) {
       setError(isPonteError(err) ? err.message : "Não foi possível adicionar o jogo.");
     } finally {
@@ -105,100 +136,64 @@ export function AddGameDialog({ open, onOpenChange }: AddGameDialogProps) {
           <DialogHeader>
             <DialogTitle>Adicionar jogo local</DialogTitle>
             <DialogDescription>
-              Aponte um .exe que já está no disco. O Ponte não baixa jogos e não
-              é uma loja.
+              Escolha a pasta do jogo. O Ponte encontra o .exe, o nome e o
+              Wine/DirectX certos, e instala o que faltar. Não baixa jogos.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-2">
-            <Label htmlFor="game-name">Nome</Label>
-            <Input
-              id="game-name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="Hades"
-              required
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="game-exe">Caminho do .exe</Label>
-            <div className="flex gap-2">
-              <Input
-                id="game-exe"
-                ref={exeInputRef}
-                value={exePath}
-                onChange={(event) => setExePath(event.target.value)}
-                placeholder="/Games/Hades/Hades.exe"
-                required
-              />
-              <Button type="button" variant="outline" onClick={() => void handlePick()}>
-                Escolher
+            <Label htmlFor="game-folder">Pasta do jogo</Label>
+            {isTauri() ? (
+              <Button
+                type="button"
+                variant={folderPath ? "outline" : "default"}
+                onClick={() => void handlePick()}
+              >
+                <FolderOpen />
+                {folderPath ? "Trocar pasta" : "Escolher pasta"}
               </Button>
-            </div>
+            ) : (
+              <div className="flex gap-2">
+                <Input
+                  id="game-folder"
+                  ref={folderInputRef}
+                  value={folderPath}
+                  onChange={(event) => {
+                    setFolderPath(event.target.value);
+                    setDiscovery(null);
+                  }}
+                  onBlur={() => {
+                    if (folderPath.trim()) {
+                      void applyFolder(folderPath);
+                    }
+                  }}
+                  placeholder="/Games/Hades"
+                  required
+                />
+                <Button type="button" variant="outline" onClick={() => void handlePick()}>
+                  Escolher
+                </Button>
+              </div>
+            )}
+            {folderPath && isTauri() ? (
+              <p className="break-all text-xs text-muted-foreground">{folderPath}</p>
+            ) : null}
             {!isTauri() ? (
               <p className="text-xs text-muted-foreground">
-                Neste navegador cole o caminho. No app do Mac, Escolher abre o
-                diálogo nativo.
+                Neste navegador cole o caminho da pasta. No app do Mac,
+                Escolher abre o diálogo nativo.
               </p>
             ) : null}
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="game-args">Argumentos (opcional)</Label>
-            <Input
-              id="game-args"
-              value={args}
-              onChange={(event) => setArgs(event.target.value)}
-              placeholder="-windowed"
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label>Motor</Label>
-            <Select
-              value={runtimeKind}
-              onValueChange={(value) => {
-                const kind = value as RuntimeKind;
-                setRuntimeKind(kind);
-                const next = catalogEntry(kind);
-                if (!next.supportedBackends.includes(dxBackend)) {
-                  setDxBackend(next.defaultBackend);
-                }
-              }}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {motorOptions.map((runtime) => (
-                  <SelectItem key={runtime.kind} value={runtime.kind}>
-                    {runtime.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid gap-2">
-            <Label>Backend DirectX</Label>
-            <Select
-              value={dxBackend}
-              onValueChange={(value) => setDxBackend(value as DxBackend)}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {supported.map((backend) => (
-                  <SelectItem key={backend} value={backend}>
-                    {dxBackendLabel(backend)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {resolving ? (
+              <p className="text-xs text-muted-foreground">A procurar o executável…</p>
+            ) : null}
+            {discovery ? <DiscoverySummary discovery={discovery} /> : null}
           </div>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancelar
             </Button>
-            <Button type="submit" disabled={pending}>
+            <Button type="submit" disabled={pending || resolving || !folderPath.trim()}>
               {pending ? "A guardar…" : "Adicionar"}
             </Button>
           </DialogFooter>
