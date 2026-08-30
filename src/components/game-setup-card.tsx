@@ -39,9 +39,9 @@ export function GameSetupCard({
         <h2 className="font-heading text-sm font-medium">O que este jogo precisa</h2>
         <p className="text-sm text-muted-foreground">{plan.summary}</p>
         <p className="text-xs text-muted-foreground">
-          Detetado: {engineGuessLabel(plan.engineGuess)}. Recomendado:{" "}
+          Detetado: {engineGuessLabel(plan.engineGuess)}. O Ponte escolhe{" "}
           {runtimeKindLabel(plan.recommendedRuntime)} +{" "}
-          {dxBackendLabel(plan.recommendedBackend)}.
+          {dxBackendLabel(plan.recommendedBackend)} e instala o que faltar.
         </p>
       </div>
       <ul className="grid gap-2">
@@ -61,15 +61,16 @@ export function GameSetupCard({
         ))}
       </ul>
       {plan.canAutoFix ? (
-        <Button
-          type="button"
-          variant="outline"
-          disabled={busy}
-          onClick={onPrepare}
-        >
-          <Wrench />
-          {busy ? "A preparar…" : "Instalar o que falta"}
-        </Button>
+        busy ? (
+          <p className="text-sm text-muted-foreground">
+            A instalar automaticamente o que falta…
+          </p>
+        ) : (
+          <Button type="button" variant="outline" onClick={onPrepare}>
+            <Wrench />
+            Tentar de novo
+          </Button>
+        )
       ) : plan.items.every((item) => item.status === "ready") ? (
         <p className="text-xs text-muted-foreground">
           Já está instalado neste prefixo. O Ponte não volta a instalar.

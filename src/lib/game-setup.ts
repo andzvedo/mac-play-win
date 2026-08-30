@@ -4,6 +4,7 @@ import type {
   EngineGuess,
   Runtime,
   RuntimeKind,
+  SetupItem,
   SetupItemStatus,
 } from "./types";
 
@@ -71,6 +72,70 @@ export function recommendedStack(runtimes: Runtime[]): {
     return { runtimeKind: "custom", dxBackend: "wined3d" };
   }
   return { runtimeKind: "gcenx_staging", dxBackend: "dxvk" };
+}
+
+export function previewSetup(runtimes: Runtime[]): {
+  items: SetupItem[];
+  canAutoFix: boolean;
+} {
+  const wineFound = runtimes.some((item) => item.found);
+  const items: SetupItem[] = [
+    {
+      id: "runtime",
+      label: "Wine",
+      status: wineFound ? "ready" : "installable",
+      detail: wineFound
+        ? "Wine já detetado neste Mac."
+        : "O Ponte instala o Wine Staging via Homebrew se faltar.",
+    },
+    {
+      id: "graphics",
+      label: "DirectX",
+      status: "installable",
+      detail: "D3DMetal, DXMT ou DXVK-macOS conforme o motor disponível.",
+    },
+    {
+      id: "prefix",
+      label: "Prefixo Wine",
+      status: "installable",
+      detail: "Criado automaticamente na preparação deste jogo.",
+    },
+    {
+      id: "vcrun",
+      label: "Visual C++",
+      status: "installable",
+      detail: "Runtime Microsoft 2015–2022 neste prefixo.",
+    },
+  ];
+  return {
+    items,
+    canAutoFix: items.some((item) => item.status === "installable"),
+  };
+}
+
+export function pendingInstallLabels(items: SetupItem[]): string[] {
+  return items
+    .filter(
+      (item) => item.status === "installable" || item.status === "missing",
+    )
+    .map((item) => item.label);
+}
+
+export function gamePrepareKey(gameId: string, exePath: string): string {
+  return `${gameId}:${exePath}`;
+}
+
+export function shouldAutoPrepare(
+  canAutoFix: boolean,
+  prepareKey: string,
+  alreadyTriedKey: string | null,
+  planGameId = "",
+  gameId = "",
+): boolean {
+  if (planGameId && gameId && planGameId !== gameId) {
+    return false;
+  }
+  return canAutoFix && prepareKey.length > 0 && alreadyTriedKey !== prepareKey;
 }
 
 export function runtimeCanAutoInstall(kind: RuntimeKind): boolean {

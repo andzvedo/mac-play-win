@@ -67,7 +67,7 @@ A primeira compilação demora. Na janela Ponte: **Ajustes** → confira se o `w
 
 ### 4. Wine (obrigatório para jogar)
 
-Na ficha do jogo, **Instalar o que falta** (e o próprio **Iniciar**) analisa a pasta, encontra o `.exe` e instala o que der: Wine Staging via Homebrew se não houver `wine64`, prefixo, DXVK-macOS no prefixo (DirectX 11) e Visual C++ 2015–2022. O GPTK e o CrossOver continuam manuais:
+Na ficha do jogo, a preparação corre sozinha (e o **Iniciar** também a garante): Wine Staging via Homebrew se não houver `wine64`, prefixo, DXVK-macOS no prefixo (DirectX 11) e Visual C++ 2015–2022. O GPTK e o CrossOver continuam manuais:
 
 - [Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/) ou [Gcenx/game-porting-toolkit](https://github.com/Gcenx/game-porting-toolkit)
 - [Wine Staging Gcenx](https://github.com/Gcenx/macOS_Wine_builds) (também via `brew install --cask --no-quarantine wine@staging`)

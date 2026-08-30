@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::CommandError;
 use crate::paths::is_windows_exe_path;
-use crate::setup::{guess_engine, recommended_stack_for_engine};
+use crate::setup::preview_plan;
 use crate::storage::expand_home;
 use crate::types::GameDiscovery;
 
@@ -73,15 +73,16 @@ fn discovery_from_exe(exe: &Path) -> Result<GameDiscovery, CommandError> {
 }
 
 fn discovery_from_paths(folder: &Path, exe: &Path) -> GameDiscovery {
-    let engine = guess_engine(exe);
-    let (runtime, backend) = recommended_stack_for_engine(&engine);
+    let plan = preview_plan(exe);
     GameDiscovery {
         folder_path: folder.to_string_lossy().into_owned(),
         exe_path: exe.to_string_lossy().into_owned(),
         suggested_name: suggested_name(folder, exe),
-        engine_guess: engine,
-        recommended_runtime: runtime,
-        recommended_backend: backend,
+        engine_guess: plan.engine_guess,
+        recommended_runtime: plan.recommended_runtime,
+        recommended_backend: plan.recommended_backend,
+        setup_items: plan.items,
+        can_auto_fix: plan.can_auto_fix,
     }
 }
 

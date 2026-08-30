@@ -130,6 +130,10 @@ pub struct GameDiscovery {
     pub engine_guess: EngineGuess,
     pub recommended_runtime: RuntimeKind,
     pub recommended_backend: DxBackend,
+    #[serde(default)]
+    pub setup_items: Vec<SetupItem>,
+    #[serde(default)]
+    pub can_auto_fix: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

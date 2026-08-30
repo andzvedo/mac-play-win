@@ -27,6 +27,10 @@ describe("discover-game", () => {
     expect(found.folderPath).toBe("/Games/Hades");
     expect(found.exePath).toBe("/Games/Hades/Hades.exe");
     expect(found.suggestedName).toBe("Hades");
+    expect(found.canAutoFix).toBe(true);
+    expect(found.setupItems.some((item) => item.status === "installable")).toBe(
+      true,
+    );
   });
 
   it("aceita um .exe colado no mock", () => {

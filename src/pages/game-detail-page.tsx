@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, LoaderCircle, Play, Square } from "lucide-react";
 import { CompatibilityNotice } from "@/components/compatibility-notice";
 import { GameSetupCard } from "@/components/game-setup-card";
@@ -29,6 +29,7 @@ import {
 import { usePonte } from "@/context/ponte-context";
 import { assertNever } from "@/lib/assert-never";
 import { gameInstallDir } from "@/lib/discover-game";
+import { gamePrepareKey, shouldAutoPrepare } from "@/lib/game-setup";
 import { catalogEntry, dxBackendLabel, runtimeKindLabel } from "@/lib/runtime-catalog";
 import { prefixStatusLabel } from "@/lib/prefix-status";
 import type { DxBackend, GameSetupPlan, LaunchState, RuntimeKind } from "@/lib/types";
@@ -52,7 +53,6 @@ function statusCopy(state: LaunchState): string {
 
 export function GameDetailPage() {
   const { id } = useParams();
-  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const {
     games,
@@ -75,8 +75,7 @@ export function GameDetailPage() {
   const [busy, setBusy] = useState(false);
   const [plan, setPlan] = useState<GameSetupPlan | null>(null);
   const game = games.find((item) => item.id === id);
-  const shouldPrepare = searchParams.get("preparar") === "1";
-  const autoPrepareRef = useRef(false);
+  const autoPreparedFor = useRef<string | null>(null);
   const getGameSetupRef = useRef(getGameSetup);
   getGameSetupRef.current = getGameSetup;
 
@@ -107,11 +106,19 @@ export function GameDetailPage() {
     if (!game || !plan) {
       return;
     }
-    if (!shouldPrepare || !plan.canAutoFix || autoPrepareRef.current) {
+    const key = gamePrepareKey(game.id, game.exePath);
+    if (
+      !shouldAutoPrepare(
+        plan.canAutoFix,
+        key,
+        autoPreparedFor.current,
+        plan.gameId,
+        game.id,
+      )
+    ) {
       return;
     }
-    autoPrepareRef.current = true;
-    setSearchParams({}, { replace: true });
+    autoPreparedFor.current = key;
     setBusy(true);
     void (async () => {
       try {
@@ -123,7 +130,7 @@ export function GameDetailPage() {
         setBusy(false);
       }
     })();
-  }, [game, plan, shouldPrepare, setSearchParams, prepareGame, getGameSetup]);
+  }, [game, plan, prepareGame, getGameSetup]);
 
   if (!loading && id && !game) {
     return (

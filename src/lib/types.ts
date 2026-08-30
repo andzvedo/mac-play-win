@@ -90,6 +90,8 @@ export interface GameDiscovery {
   engineGuess: EngineGuess;
   recommendedRuntime: RuntimeKind;
   recommendedBackend: DxBackend;
+  setupItems: SetupItem[];
+  canAutoFix: boolean;
 }
 
 export interface AddGameInput {

@@ -13,7 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { usePonte } from "@/context/ponte-context";
-import { engineGuessLabel } from "@/lib/game-setup";
+import { engineGuessLabel, pendingInstallLabels } from "@/lib/game-setup";
 import { isPonteError } from "@/lib/errors";
 import { isTauri } from "@/lib/ponte";
 import { dxBackendLabel, runtimeKindLabel } from "@/lib/runtime-catalog";
@@ -25,6 +25,7 @@ interface AddGameDialogProps {
 }
 
 function DiscoverySummary({ discovery }: { discovery: GameDiscovery }) {
+  const pending = pendingInstallLabels(discovery.setupItems);
   return (
     <dl className="grid gap-2 rounded-lg border p-3 text-sm">
       <div className="grid gap-0.5">
@@ -48,6 +49,16 @@ function DiscoverySummary({ discovery }: { discovery: GameDiscovery }) {
           </dd>
         </div>
       </div>
+      {pending.length > 0 ? (
+        <div className="grid gap-0.5">
+          <dt className="text-xs text-muted-foreground">Vai instalar sozinho</dt>
+          <dd>{pending.join(", ")}</dd>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Já está tudo pronto para este jogo.
+        </p>
+      )}
     </dl>
   );
 }
@@ -121,7 +132,7 @@ export function AddGameDialog({ open, onOpenChange }: AddGameDialogProps) {
         args: "",
       });
       onOpenChange(false);
-      navigate(`/games/${game.id}?preparar=1`);
+      navigate(`/games/${game.id}`);
     } catch (err) {
       setError(isPonteError(err) ? err.message : "Não foi possível adicionar o jogo.");
     } finally {
@@ -136,8 +147,8 @@ export function AddGameDialog({ open, onOpenChange }: AddGameDialogProps) {
           <DialogHeader>
             <DialogTitle>Adicionar jogo local</DialogTitle>
             <DialogDescription>
-              Escolha a pasta do jogo. O Ponte encontra o .exe, o nome e o
-              Wine/DirectX certos, e instala o que faltar. Não baixa jogos.
+              Escolha a pasta do jogo. O Ponte encontra o .exe e instala
+              sozinho Wine, DirectX, o prefixo e o Visual C++ se faltarem.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-2">

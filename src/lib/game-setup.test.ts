@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   engineGuessLabel,
+  pendingInstallLabels,
   recommendedStack,
   runtimeCanAutoInstall,
+  shouldAutoPrepare,
   setupItemStatusLabel,
 } from "./game-setup";
 import { emptyRuntime } from "./runtime-catalog";
@@ -64,5 +66,38 @@ describe("game-setup labels", () => {
       runtimeKind: "gcenx_staging",
       dxBackend: "dxmt",
     });
+  });
+
+  it("instala automaticamente enquanto houver itens em falta", () => {
+    expect(shouldAutoPrepare(true, "game:exe", null)).toBe(true);
+    expect(shouldAutoPrepare(true, "game:exe", "game:exe")).toBe(false);
+    expect(shouldAutoPrepare(false, "game:exe", null)).toBe(false);
+    expect(shouldAutoPrepare(true, "b:exe", null, "a", "b")).toBe(false);
+    expect(shouldAutoPrepare(true, "b:exe", null, "b", "b")).toBe(true);
+  });
+
+  it("lista o que ainda falta instalar", () => {
+    expect(
+      pendingInstallLabels([
+        {
+          id: "runtime",
+          label: "Wine",
+          status: "ready",
+          detail: "",
+        },
+        {
+          id: "prefix",
+          label: "Prefixo Wine",
+          status: "installable",
+          detail: "",
+        },
+        {
+          id: "vcrun",
+          label: "Visual C++",
+          status: "missing",
+          detail: "",
+        },
+      ]),
+    ).toEqual(["Prefixo Wine", "Visual C++"]);
   });
 });

@@ -314,6 +314,28 @@ pub fn plan_for_game(game: &Game) -> GameSetupPlan {
     }
 }
 
+pub fn preview_plan(exe: &Path) -> GameSetupPlan {
+    let engine = guess_engine(exe);
+    let (runtime, backend) = recommended_stack_for_engine(&engine);
+    let dummy = Game {
+        id: String::new(),
+        name: String::new(),
+        exe_path: exe.to_string_lossy().into_owned(),
+        install_dir: exe
+            .parent()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        args: String::new(),
+        runtime_kind: runtime,
+        dx_backend: backend,
+        prefix_path: String::from("/tmp/ponte-preview-prefix-missing"),
+        prefix_status: PrefixStatus::Missing,
+        prefix_error: None,
+        created_at: String::new(),
+    };
+    plan_for_game(&dummy)
+}
+
 fn run_timed(
     mut child: std::process::Child,
     timeout: Duration,

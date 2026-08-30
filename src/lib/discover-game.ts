@@ -1,6 +1,6 @@
 import { PonteError } from "./errors";
 import { isWindowsExePath } from "./exe-path";
-import { recommendedStack } from "./game-setup";
+import { previewSetup, recommendedStack } from "./game-setup";
 import type { EngineGuess, GameDiscovery, Runtime } from "./types";
 
 export function normalizeFolderPath(path: string): string {
@@ -79,6 +79,7 @@ export function resolveGameFolderFromPath(
     );
   }
   const stack = recommendedStack(runtimes);
+  const preview = previewSetup(runtimes);
   if (isWindowsExePath(trimmed)) {
     const folderPath = parentPath(trimmed);
     return {
@@ -88,6 +89,8 @@ export function resolveGameFolderFromPath(
       engineGuess: guessEngineFromExePath(trimmed),
       recommendedRuntime: stack.runtimeKind,
       recommendedBackend: stack.dxBackend,
+      setupItems: preview.items,
+      canAutoFix: preview.canAutoFix,
     };
   }
   if (looksLikeNonExeFile(trimmed)) {
@@ -104,6 +107,8 @@ export function resolveGameFolderFromPath(
     engineGuess: "unknown",
     recommendedRuntime: stack.runtimeKind,
     recommendedBackend: stack.dxBackend,
+    setupItems: preview.items,
+    canAutoFix: preview.canAutoFix,
   };
 }
 
