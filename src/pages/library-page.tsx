@@ -1,15 +1,19 @@
 import { useState } from "react";
-import { Plus, Wine } from "lucide-react";
+import { Plus, Search, Wine } from "lucide-react";
 import { AddGameDialog } from "@/components/add-game-dialog";
 import { CompatibilityNotice } from "@/components/compatibility-notice";
 import { GameCard } from "@/components/game-card";
 import { RuntimeBanner } from "@/components/runtime-banner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { usePonte } from "@/context/ponte-context";
+import { filterGames } from "@/lib/filter-games";
 
 export function LibraryPage() {
   const { games, foundRuntimes, launch, loading, actionError } = usePonte();
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const visible = filterGames(games, query);
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6">
@@ -60,15 +64,31 @@ export function LibraryPage() {
         </div>
       ) : (
         <>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {games.map((game) => (
-              <GameCard
-                key={game.id}
-                game={game}
-                launchState={launch[game.id] ?? "idle"}
-              />
-            ))}
+          <div className="relative max-w-md">
+            <Search className="pointer-events-none absolute top-2.5 left-2.5 size-4 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Buscar por nome, caminho ou motor"
+              className="pl-8"
+              aria-label="Buscar jogos"
+            />
           </div>
+          {visible.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Nenhum jogo corresponde a “{query.trim()}”.
+            </p>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {visible.map((game) => (
+                <GameCard
+                  key={game.id}
+                  game={game}
+                  launchState={launch[game.id] ?? "idle"}
+                />
+              ))}
+            </div>
+          )}
           <CompatibilityNotice compact />
         </>
       )}

@@ -126,6 +126,22 @@ fn pick_exe(app: tauri::AppHandle) -> Option<String> {
         .map(|path| path.to_string())
 }
 
+#[tauri::command]
+fn pick_wine(app: tauri::AppHandle) -> Option<String> {
+    app.dialog()
+        .file()
+        .blocking_pick_file()
+        .map(|path| path.to_string())
+}
+
+#[tauri::command]
+fn pick_directory(app: tauri::AppHandle) -> Option<String> {
+    app.dialog()
+        .file()
+        .blocking_pick_folder()
+        .map(|path| path.to_string())
+}
+
 fn apply_prefix(state: &AppState, game_id: &str) -> Result<Game, CommandError> {
     let mut library = read_library()?;
     let game = find_game(&library, game_id)?;
@@ -213,6 +229,8 @@ pub fn run() {
             update_game,
             remove_game,
             pick_exe,
+            pick_wine,
+            pick_directory,
             create_prefix,
             launch_game,
             stop_game,

@@ -33,6 +33,8 @@ interface PonteContextValue {
   updateGame: (game: Game) => Promise<Game>;
   removeGame: (id: string) => Promise<void>;
   pickExe: () => Promise<string | null>;
+  pickWine: () => Promise<string | null>;
+  pickDirectory: () => Promise<string | null>;
   createPrefix: (id: string) => Promise<void>;
   launchGame: (id: string) => Promise<void>;
   stopGame: (id: string) => Promise<void>;
@@ -148,6 +150,8 @@ export function PonteProvider({ children }: { children: ReactNode }) {
           await refresh();
         }),
       pickExe: () => backend.pickExe(),
+      pickWine: () => backend.pickWine(),
+      pickDirectory: () => backend.pickDirectory(),
       createPrefix: (id) =>
         runAction(async () => {
           await backend.createPrefix(id);

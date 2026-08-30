@@ -149,6 +149,14 @@ export class WebPonteBackend implements PonteBackend {
     return Promise.resolve(null);
   }
 
+  pickWine(): Promise<string | null> {
+    return Promise.resolve(null);
+  }
+
+  pickDirectory(): Promise<string | null> {
+    return Promise.resolve(null);
+  }
+
   async createPrefix(gameId: string): Promise<Game> {
     const game = await this.requireGame(gameId);
     const runtime = await this.resolveRuntime(game.runtimeKind);

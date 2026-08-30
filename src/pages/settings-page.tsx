@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { RuntimeBanner } from "@/components/runtime-banner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -8,13 +8,24 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { usePonte } from "@/context/ponte-context";
+import { isTauri } from "@/lib/ponte";
 
 export function SettingsPage() {
-  const { settings, runtimes, foundRuntimes, saveSettings, actionError } = usePonte();
+  const {
+    settings,
+    runtimes,
+    foundRuntimes,
+    saveSettings,
+    actionError,
+    pickWine,
+    pickDirectory,
+  } = usePonte();
   const [customWinePath, setCustomWinePath] = useState(settings.customWinePath);
   const [prefixesDir, setPrefixesDir] = useState(settings.prefixesDir);
   const [metalHud, setMetalHud] = useState(settings.metalHud);
   const [saved, setSaved] = useState(false);
+  const wineInputRef = useRef<HTMLInputElement>(null);
+  const prefixInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setCustomWinePath(settings.customWinePath);
@@ -24,6 +35,30 @@ export function SettingsPage() {
 
   function markDirty() {
     setSaved(false);
+  }
+
+  async function chooseWine() {
+    const path = await pickWine();
+    if (path) {
+      markDirty();
+      setCustomWinePath(path);
+      return;
+    }
+    if (!isTauri()) {
+      wineInputRef.current?.focus();
+    }
+  }
+
+  async function choosePrefixDir() {
+    const path = await pickDirectory();
+    if (path) {
+      markDirty();
+      setPrefixesDir(path);
+      return;
+    }
+    if (!isTauri()) {
+      prefixInputRef.current?.focus();
+    }
   }
 
   async function handleSave(event: React.FormEvent) {
@@ -72,27 +107,45 @@ export function SettingsPage() {
 
       <div className="grid gap-2">
         <Label htmlFor="wine-path">Caminho manual do wine64</Label>
-        <Input
-          id="wine-path"
-          value={customWinePath}
-          onChange={(event) => {
-            markDirty();
-            setCustomWinePath(event.target.value);
-          }}
-          placeholder="/opt/homebrew/bin/wine64"
-        />
+        <div className="flex gap-2">
+          <Input
+            id="wine-path"
+            ref={wineInputRef}
+            value={customWinePath}
+            onChange={(event) => {
+              markDirty();
+              setCustomWinePath(event.target.value);
+            }}
+            placeholder="/opt/homebrew/bin/wine64"
+          />
+          <Button type="button" variant="outline" onClick={() => void chooseWine()}>
+            Escolher
+          </Button>
+        </div>
+        {!isTauri() ? (
+          <p className="text-xs text-muted-foreground">
+            Neste navegador cole o caminho. No app do Mac, Escolher abre o
+            diálogo nativo.
+          </p>
+        ) : null}
       </div>
 
       <div className="grid gap-2">
         <Label htmlFor="prefix-dir">Pasta de prefixos</Label>
-        <Input
-          id="prefix-dir"
-          value={prefixesDir}
-          onChange={(event) => {
-            markDirty();
-            setPrefixesDir(event.target.value);
-          }}
-        />
+        <div className="flex gap-2">
+          <Input
+            id="prefix-dir"
+            ref={prefixInputRef}
+            value={prefixesDir}
+            onChange={(event) => {
+              markDirty();
+              setPrefixesDir(event.target.value);
+            }}
+          />
+          <Button type="button" variant="outline" onClick={() => void choosePrefixDir()}>
+            Escolher
+          </Button>
+        </div>
         <p className="text-xs text-muted-foreground">
           Jogos já adicionados mantêm o prefixo antigo. A nova pasta vale para os
           próximos.

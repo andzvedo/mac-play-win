@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { prefixStatusLabel } from "@/lib/prefix-status";
 import { dxBackendLabel, runtimeKindLabel } from "@/lib/runtime-catalog";
 import { assertNever } from "@/lib/assert-never";
 import type { Game, LaunchState } from "@/lib/types";
@@ -43,6 +44,7 @@ export function GameCard({
           <div className="flex flex-wrap gap-1.5 pt-1">
             <Badge variant="outline">{runtimeKindLabel(game.runtimeKind)}</Badge>
             <Badge variant="outline">{dxBackendLabel(game.dxBackend)}</Badge>
+            <Badge variant="outline">{prefixStatusLabel(game.prefixStatus)}</Badge>
           </div>
         </CardHeader>
       </Card>

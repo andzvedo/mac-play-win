@@ -14,6 +14,8 @@ export interface PonteBackend {
   updateGame(game: Game): Promise<Game>;
   removeGame(id: string): Promise<void>;
   pickExe(): Promise<string | null>;
+  pickWine(): Promise<string | null>;
+  pickDirectory(): Promise<string | null>;
   createPrefix(gameId: string): Promise<Game>;
   launchGame(gameId: string): Promise<void>;
   stopGame(gameId: string): Promise<void>;
