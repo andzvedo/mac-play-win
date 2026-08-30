@@ -1,77 +1,83 @@
 # Ponte
 
-Launcher para **jogos Windows que você já tem no disco**, no MacBook Apple Silicon. O Ponte cria um prefixo Wine por jogo, deixa você escolher o motor (GPTK, Wine Staging Gcenx, winecx, CrossOver ou um `wine64` manual) e dispara o `.exe`.
+Launcher para **jogos Windows que você já tem no disco**, no MacBook Apple Silicon.
 
-Não é emulador de Windows, não é loja e não baixa jogos. Também não garante que um título específico abra.
+Não é emulador, não é loja e não baixa jogos. O Ponte aponta um `.exe` local, cria um prefixo Wine e dispara o `wine64` que estiver no seu Mac.
 
-## O que cobre
+## Rodar no Mac
 
-- Biblioteca de `.exe` locais
-- Prefixo Wine isolado por jogo
-- Seletor de motor e de backend DirectX (D3DMetal, DXMT, DXVK-macOS, WineD3D)
-- Iniciar / parar e log da saída do Wine
-- Ajustes: caminho manual do `wine64`, pasta de prefixos, HUD Metal
+Abra esta pasta do projeto no Terminal (ou no Cursor → Terminal).
 
-## O que não cobre
+### 1. Node 22+
 
-- Hydra, torrents, scrapers de repacks
-- Lojas (Steam, Epic, GOG) como cliente
-- Instalar o Game Porting Toolkit por você
-- Anti-cheat de kernel (Easy Anti-Cheat, BattlEye, Vanguard)
-- Redistribuir D3DMetal (licença da Apple)
+```bash
+node -v
+```
 
-Nem CrossOver pago abre todos os jogos. Anti-cheat, DRM e DirectX incompleto ainda barram títulos. Trocar o motor pode ajudar; o log mostra a falha.
+Se não tiver: [nodejs.org](https://nodejs.org/) ou `brew install node`.
 
-## Pré-requisito no Mac
-
-Pelo menos um `wine64`:
-
-- [Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/) (conta Apple Developer), ou o build [Gcenx](https://github.com/Gcenx/game-porting-toolkit)
-- ou [Wine Staging Gcenx](https://github.com/Gcenx/macOS_Wine_builds)
-- ou [Wine CX](https://github.com/Gcenx/winecx) / CrossOver já instalado
-
-O Ponte **não empacota** Wine nem D3DMetal. Depois de instalar, abra Ajustes e confira se o binário foi detectado (ou cole o caminho).
-
-## Como rodar
+### 2. Dependências
 
 ```bash
 npm install
 ```
 
-Só a interface (navegador, launch simulado):
+### 3. Escolha o modo
+
+**Só a interface** (navegador; o botão Iniciar é simulado):
 
 ```bash
-npm run dev
+npm start
 ```
 
-Abre em `http://127.0.0.1:43123`. Neste modo a detecção de motores é um mock e o “Iniciar” não dispara Wine.
+Abre [http://127.0.0.1:43123](http://127.0.0.1:43123).
 
-No Mac, com o jogo de verdade:
+**Jogo de verdade** (janela nativa + Wine):
 
 ```bash
-npm run tauri dev
+xcode-select --install
+softwareupdate --install-rosetta --agree-to-license
 ```
 
-Requer [pré-requisitos do Tauri](https://v2.tauri.app/start/prerequisites/) (Xcode CLT, Rust). O projeto pede Rust **1.88+** (`rust-toolchain.toml`).
+Instale Rust se ainda não tiver:
 
 ```bash
-npm test
-npm run build
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-## Motores OSS
+O projeto pede Rust **1.88+** (`rust-toolchain.toml`). Depois:
 
-O Ponte só orquestra o que a comunidade já mantém:
+```bash
+npm run tauri:dev
+```
 
-| Camada | Projeto |
-| --- | --- |
-| Wine no Mac | [Gcenx/macOS_Wine_builds](https://github.com/Gcenx/macOS_Wine_builds) |
-| Wine CX | [Gcenx/winecx](https://github.com/Gcenx/winecx) |
-| DX12/11 → Metal | Apple GPTK / D3DMetal |
-| DX10/11 → Metal | [DXMT](https://github.com/3Shain/dxmt) |
-| DX10/11 → Vulkan | [DXVK-macOS](https://github.com/Gcenx/DXVK-macOS) |
+A primeira compilação demora. Na janela Ponte: **Ajustes** → confira se o `wine64` foi encontrado (ou **Escolher** o binário) → **Adicionar jogo** com o `.exe` no disco → **Iniciar**.
 
-Heroic e Mythic já fazem loja + sideload. O Ponte é o fluxo “tenho o `.exe` neste disco”.
+### 4. Wine (obrigatório para jogar)
+
+O Ponte **não instala** Wine. Precisa de pelo menos um `wine64`:
+
+- [Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/) ou [Gcenx/game-porting-toolkit](https://github.com/Gcenx/game-porting-toolkit)
+- [Wine Staging Gcenx](https://github.com/Gcenx/macOS_Wine_builds)
+- [Wine CX](https://github.com/Gcenx/winecx) / CrossOver
+
+### App para a pasta Aplicativos
+
+```bash
+npm run tauri:build
+```
+
+O `.app` sai em `src-tauri/target/release/bundle/macos/`.
+
+### Checagens
+
+```bash
+npm run check
+```
+
+## O que não cobre
+
+Hydra, torrents, lojas Steam/Epic, instalar GPTK por você, anti-cheat de kernel. Trocar o motor pode ajudar; não é garantia de que o título abre.
 
 ## Licença
 

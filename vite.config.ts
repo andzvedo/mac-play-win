@@ -28,6 +28,11 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  preview: {
+    port: 43123,
+    strictPort: true,
+    host: "127.0.0.1",
+  },
   test: {
     environment: "node",
   },
