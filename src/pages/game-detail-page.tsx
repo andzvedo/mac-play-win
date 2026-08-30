@@ -28,6 +28,7 @@ import {
 import { usePonte } from "@/context/ponte-context";
 import { assertNever } from "@/lib/assert-never";
 import { catalogEntry, dxBackendLabel, runtimeKindLabel } from "@/lib/runtime-catalog";
+import { prefixStatusLabel } from "@/lib/prefix-status";
 import type { DxBackend, LaunchState, RuntimeKind } from "@/lib/types";
 
 function statusCopy(state: LaunchState): string {
@@ -143,13 +144,31 @@ export function GameDetailPage() {
             Iniciar
           </Button>
         )}
-        <Button
-          variant="outline"
-          disabled={busy}
-          onClick={() => void withBusy(() => createPrefix(game.id))}
-        >
-          Recriar prefixo
-        </Button>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button variant="outline" disabled={busy}>
+              Recriar prefixo
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Recriar o prefixo Wine?</AlertDialogTitle>
+              <AlertDialogDescription>
+                O Ponte volta a correr wineboot neste prefixo. Dados do Windows
+                dentro dessa pasta podem ser substituídos. O .exe do jogo no disco
+                não é apagado.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancelar</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => void withBusy(() => createPrefix(game.id))}
+              >
+                Recriar
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
         <AlertDialog>
           <AlertDialogTrigger asChild>
             <Button variant="destructive" disabled={busy}>
@@ -250,7 +269,7 @@ export function GameDetailPage() {
         <Label>Prefixo</Label>
         <p className="break-all text-sm text-muted-foreground">{game.prefixPath}</p>
         <p className="text-xs text-muted-foreground">
-          Estado: {game.prefixStatus}
+          Estado: {prefixStatusLabel(game.prefixStatus)}
           {game.prefixError ? ` — ${game.prefixError}` : ""}
         </p>
       </div>

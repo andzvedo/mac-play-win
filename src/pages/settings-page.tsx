@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
+import { Check } from "lucide-react";
 import { RuntimeBanner } from "@/components/runtime-banner";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { usePonte } from "@/context/ponte-context";
-import { Badge } from "@/components/ui/badge";
 
 export function SettingsPage() {
   const { settings, runtimes, foundRuntimes, saveSettings, actionError } = usePonte();
@@ -20,11 +22,18 @@ export function SettingsPage() {
     setMetalHud(settings.metalHud);
   }, [settings]);
 
+  function markDirty() {
+    setSaved(false);
+  }
+
   async function handleSave(event: React.FormEvent) {
     event.preventDefault();
-    await saveSettings({ customWinePath, prefixesDir, metalHud });
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 2000);
+    try {
+      await saveSettings({ customWinePath, prefixesDir, metalHud });
+      setSaved(true);
+    } catch {
+      setSaved(false);
+    }
   }
 
   return (
@@ -66,7 +75,10 @@ export function SettingsPage() {
         <Input
           id="wine-path"
           value={customWinePath}
-          onChange={(event) => setCustomWinePath(event.target.value)}
+          onChange={(event) => {
+            markDirty();
+            setCustomWinePath(event.target.value);
+          }}
           placeholder="/opt/homebrew/bin/wine64"
         />
       </div>
@@ -76,7 +88,10 @@ export function SettingsPage() {
         <Input
           id="prefix-dir"
           value={prefixesDir}
-          onChange={(event) => setPrefixesDir(event.target.value)}
+          onChange={(event) => {
+            markDirty();
+            setPrefixesDir(event.target.value);
+          }}
         />
         <p className="text-xs text-muted-foreground">
           Jogos já adicionados mantêm o prefixo antigo. A nova pasta vale para os
@@ -94,15 +109,27 @@ export function SettingsPage() {
         <Switch
           id="hud"
           checked={metalHud}
-          onCheckedChange={setMetalHud}
+          onCheckedChange={(checked) => {
+            markDirty();
+            setMetalHud(checked);
+          }}
         />
       </div>
 
       {actionError ? <p className="text-sm text-destructive">{actionError}</p> : null}
+      {saved ? (
+        <Alert>
+          <Check />
+          <AlertTitle>Salvo</AlertTitle>
+          <AlertDescription>
+            Os ajustes ficam neste aparelho. No Mac, o próximo lançamento já usa
+            o wine64 e o HUD que você escolheu.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <div className="flex items-center gap-3">
         <Button type="submit">Guardar</Button>
-        {saved ? <span className="text-sm text-muted-foreground">Salvo</span> : null}
       </div>
     </form>
   );

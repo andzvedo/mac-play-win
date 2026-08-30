@@ -35,7 +35,11 @@ export function LibraryPage() {
       ) : null}
 
       {loading && games.length === 0 ? (
-        <p className="text-sm text-muted-foreground">A carregar a biblioteca…</p>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-busy="true">
+          <div className="h-36 animate-pulse rounded-xl border bg-muted/40" />
+          <div className="h-36 animate-pulse rounded-xl border bg-muted/40" />
+          <div className="h-36 animate-pulse rounded-xl border bg-muted/40" />
+        </div>
       ) : null}
 
       {!loading && games.length === 0 ? (

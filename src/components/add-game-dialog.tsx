@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
@@ -42,6 +42,7 @@ export function AddGameDialog({ open, onOpenChange }: AddGameDialogProps) {
   );
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const exeInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) {
@@ -69,6 +70,10 @@ export function AddGameDialog({ open, onOpenChange }: AddGameDialogProps) {
     const path = await pickExe();
     if (path) {
       setExePath(path);
+      return;
+    }
+    if (!isTauri()) {
+      exeInputRef.current?.focus();
     }
   }
 
@@ -119,6 +124,7 @@ export function AddGameDialog({ open, onOpenChange }: AddGameDialogProps) {
             <div className="flex gap-2">
               <Input
                 id="game-exe"
+                ref={exeInputRef}
                 value={exePath}
                 onChange={(event) => setExePath(event.target.value)}
                 placeholder="/Games/Hades/Hades.exe"
