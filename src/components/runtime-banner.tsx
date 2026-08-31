@@ -35,7 +35,7 @@ export function RuntimeBanner({ foundCount }: { foundCount: number }) {
       <AlertTitle>Nenhum Wine encontrado</AlertTitle>
       <AlertDescription className="grid gap-3">
         <p>
-          O Ponte pode instalar o Wine Staging via Homebrew. Também pode
+          O Ponte pode instalar o Wine Staging gerenciado. Também pode
           apontar o{" "}
           <a href={gptk.installUrl ?? "#"} target="_blank" rel="noreferrer">
             Game Porting Toolkit

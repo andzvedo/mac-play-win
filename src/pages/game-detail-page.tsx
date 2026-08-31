@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, LoaderCircle, Play, Square } from "lucide-react";
 import { CompatibilityNotice } from "@/components/compatibility-notice";
+import { GamePreflightCard } from "@/components/game-preflight-card";
 import { GameSetupCard } from "@/components/game-setup-card";
+import { LaunchAttemptHistory } from "@/components/launch-attempt-history";
 import { LogPanel } from "@/components/log-panel";
 import {
   AlertDialog,
@@ -65,6 +67,10 @@ export function GameDetailPage() {
     createPrefix,
     installVcrun,
     getGameSetup,
+    getGamePreflight,
+    listLaunchAttempts,
+    preflights,
+    launchAttempts,
     prepareGame,
     launchGame,
     stopGame,
@@ -78,6 +84,10 @@ export function GameDetailPage() {
   const autoPreparedFor = useRef<string | null>(null);
   const getGameSetupRef = useRef(getGameSetup);
   getGameSetupRef.current = getGameSetup;
+  const getGamePreflightRef = useRef(getGamePreflight);
+  getGamePreflightRef.current = getGamePreflight;
+  const listLaunchAttemptsRef = useRef(listLaunchAttempts);
+  listLaunchAttemptsRef.current = listLaunchAttempts;
 
   useEffect(() => {
     if (!id) {
@@ -101,6 +111,18 @@ export function GameDetailPage() {
       cancelled = true;
     };
   }, [id, game?.prefixStatus, game?.runtimeKind, game?.dxBackend, game?.exePath]);
+
+  useEffect(() => {
+    if (!id) {
+      return;
+    }
+    void Promise.all([
+      getGamePreflightRef.current(id),
+      listLaunchAttemptsRef.current(id, 10),
+    ]).catch(() => {
+      /* o estado da página já mostra a última preparação conhecida */
+    });
+  }, [id, launch[id ?? ""], game?.prefixStatus, game?.runtimeKind, game?.dxBackend, game?.exePath]);
 
   useEffect(() => {
     if (!game || !plan) {
@@ -236,6 +258,20 @@ export function GameDetailPage() {
           }
         />
       ) : null}
+
+      <GamePreflightCard
+        preflight={preflights[game.id] ?? null}
+        onRefresh={() => {
+          void Promise.all([
+            getGamePreflight(game.id),
+            listLaunchAttempts(game.id, 10),
+          ]).catch(() => {
+            /* mensagem já vai em actionError */
+          });
+        }}
+      />
+
+      <LaunchAttemptHistory attempts={launchAttempts[game.id] ?? []} />
 
       <div className="flex flex-wrap gap-2">
         {running ? (

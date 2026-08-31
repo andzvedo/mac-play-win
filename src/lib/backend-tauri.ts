@@ -6,12 +6,15 @@ import type {
   Game,
   GameDiscovery,
   GameLog,
+  GamePreflight,
   GameSetupPlan,
+  LaunchAttempt,
   LaunchState,
   PonteErrorCode,
   Runtime,
   RuntimeKind,
   Settings,
+  SystemDiagnostics,
 } from "./types";
 
 interface RustError {
@@ -66,10 +69,20 @@ export const tauriPonteBackend: PonteBackend = {
   prepareGame: (gameId) => call<Game>("prepare_game", { gameId }),
   installRuntime: (kind: RuntimeKind) =>
     call<Runtime[]>("install_runtime", { kind }),
-  launchGame: (gameId) => call<void>("launch_game", { gameId }),
+  launchGame: (gameId) => call<LaunchAttempt>("launch_game", { gameId }),
   stopGame: (gameId) => call<void>("stop_game", { gameId }),
   getLogs: (gameId) => call<GameLog>("get_logs", { gameId }),
   getLaunchState: (gameId) => call<LaunchState>("get_launch_state", { gameId }),
+  getSystemDiagnostics: () =>
+    call<SystemDiagnostics>("get_system_diagnostics"),
+  getGamePreflight: (gameId) =>
+    call<GamePreflight>("get_game_preflight", { id: gameId }),
+  listLaunchAttempts: (gameId, limit) =>
+    call<LaunchAttempt[]>("list_launch_attempts", { gameId }).then((attempts) =>
+      limit === undefined
+        ? attempts
+        : attempts.slice(0, Math.max(0, Math.trunc(limit))),
+    ),
   getSettings: () => call<Settings>("get_settings"),
   saveSettings: (settings) => call<Settings>("save_settings", { settings }),
 };

@@ -12,7 +12,10 @@
     "check": "tsc --noEmit && vitest run",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "install:local": "bash scripts/install-local.sh",
+    "install:local:dev": "bash scripts/install-local.sh --dev",
+    "open:local": "bash scripts/open-local.sh"
   },
   "engines": {
     "node": ">=22"

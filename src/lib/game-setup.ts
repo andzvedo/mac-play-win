@@ -42,6 +42,13 @@ export function recommendedStack(runtimes: Runtime[]): {
 } {
   const found = (kind: RuntimeKind) =>
     runtimes.find((item) => item.kind === kind && item.found);
+  const staging = found("gcenx_staging");
+  if (staging) {
+    return {
+      runtimeKind: "gcenx_staging",
+      dxBackend: "dxvk",
+    };
+  }
   if (found("gptk")) {
     return { runtimeKind: "gptk", dxBackend: "d3dmetal" };
   }
@@ -52,13 +59,6 @@ export function recommendedStack(runtimes: Runtime[]): {
       dxBackend: crossover.supportedBackends.includes("d3dmetal")
         ? "d3dmetal"
         : "dxvk",
-    };
-  }
-  const staging = found("gcenx_staging");
-  if (staging) {
-    return {
-      runtimeKind: "gcenx_staging",
-      dxBackend: staging.supportedBackends.includes("dxmt") ? "dxmt" : "dxvk",
     };
   }
   if (found("winecx")) {
@@ -86,7 +86,7 @@ export function previewSetup(runtimes: Runtime[]): {
       status: wineFound ? "ready" : "installable",
       detail: wineFound
         ? "Wine já detetado neste Mac."
-        : "O Ponte instala o Wine Staging via Homebrew se faltar.",
+        : "O Ponte instala o Wine Staging gerenciado e verifica o bundle.",
     },
     {
       id: "graphics",
@@ -141,8 +141,8 @@ export function shouldAutoPrepare(
 export function runtimeCanAutoInstall(kind: RuntimeKind): boolean {
   switch (kind) {
     case "gcenx_staging":
-    case "winehq":
       return true;
+    case "winehq":
     case "gptk":
     case "winecx":
     case "crossover":

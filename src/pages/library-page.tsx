@@ -56,7 +56,7 @@ export function LibraryPage() {
             <p className="max-w-lg text-sm text-muted-foreground">
               Adicione a pasta de um jogo local — cópia Steam/GOG, instalador já
               extraído ou dump que você comprou. O Ponte encontra o .exe e, se
-              faltar Wine, instala o Staging via Homebrew. Não é emulador, loja
+              faltar Wine, instala o Staging gerenciado. Não é emulador, loja
               nem garantia de que o título abre.
             </p>
           </div>

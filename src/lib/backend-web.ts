@@ -1,8 +1,9 @@
-import { PonteError } from "./errors";
+import { PonteError, toPonteError } from "./errors";
 import { envForBackend } from "./env-for-backend";
 import { isWindowsExePath } from "./exe-path";
 import { resolveGameFolderFromPath, parentPath, guessEngineFromExePath } from "./discover-game";
 import { prefixPathFor } from "./prefix-path";
+import { recommendedStack } from "./game-setup";
 import { emptyRuntime, firstFoundRuntime } from "./runtime-catalog";
 import type { PonteBackend } from "./backend";
 import type {
@@ -10,12 +11,16 @@ import type {
   Game,
   GameDiscovery,
   GameLog,
+  GamePreflight,
   GameSetupPlan,
+  LaunchAttempt,
+  LaunchFailure,
   LaunchState,
   LibraryFile,
   Runtime,
   RuntimeKind,
   Settings,
+  SystemDiagnostics,
 } from "./types";
 import {
   DEFAULT_PREFIXES_DIR,
@@ -48,6 +53,38 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+function splitArgs(value: string): string[] {
+  return (value.match(/"[^\"]*"|'[^']*'|[^\s]+/g) ?? []).map((arg) =>
+    arg.length > 1 &&
+    ((arg.startsWith('"') && arg.endsWith('"')) ||
+      (arg.startsWith("'") && arg.endsWith("'")))
+      ? arg.slice(1, -1)
+      : arg,
+  );
+}
+
+function fingerprintFor(game: Game): string {
+  const input = [
+    game.id,
+    game.exePath,
+    game.installDir,
+    game.args,
+    game.runtimeKind,
+    game.dxBackend,
+    game.prefixPath,
+  ].join("\u0000");
+  let hash = 2166136261;
+  for (const character of input) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `web-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function isRetryable(code: string): boolean {
+  return !["invalid_exe", "invalid_folder", "not_found"].includes(code);
+}
+
 function readJson<T>(key: string): T | null {
   try {
     const raw = localStorage.getItem(key);
@@ -67,6 +104,7 @@ function writeJson(key: string, value: unknown): void {
 export class WebPonteBackend implements PonteBackend {
   private launchStates = new Map<string, LaunchState>();
   private logs = new Map<string, string[]>();
+  private launchAttempts = new Map<string, LaunchAttempt[]>();
 
   detectRuntimes(): Promise<Runtime[]> {
     const settings = this.readSettings();
@@ -149,6 +187,7 @@ export class WebPonteBackend implements PonteBackend {
     this.writeLibrary(library);
     this.launchStates.delete(id);
     this.logs.delete(id);
+    this.launchAttempts.delete(id);
   }
 
   pickExe(): Promise<string | null> {
@@ -227,14 +266,17 @@ export class WebPonteBackend implements PonteBackend {
   async getGameSetup(gameId: string): Promise<GameSetupPlan> {
     const game = await this.requireGame(gameId);
     const runtimes = await this.detectRuntimes();
-    const found = firstFoundRuntime(runtimes);
+    const stack = recommendedStack(runtimes);
+    const found = runtimes.find(
+      (runtime) => runtime.kind === stack.runtimeKind && runtime.found,
+    );
     const prepared =
       game.prefixStatus === "ready" && game.dxBackend === "dxvk";
     return {
       gameId: game.id,
       engineGuess: guessEngineFromExePath(game.exePath),
-      recommendedRuntime: found?.kind ?? "gptk",
-      recommendedBackend: found ? found.supportedBackends[0] : "d3dmetal",
+      recommendedRuntime: stack.runtimeKind,
+      recommendedBackend: stack.dxBackend,
       items: [
         {
           id: "runtime",
@@ -306,49 +348,97 @@ export class WebPonteBackend implements PonteBackend {
     return this.detectRuntimes();
   }
 
-  async launchGame(gameId: string): Promise<void> {
+  async launchGame(gameId: string): Promise<LaunchAttempt> {
     const current = this.launchStates.get(gameId);
     if (current === "running" || current === "starting") {
-      return;
-    }
-    await this.requireGame(gameId);
-    const setup = await this.getGameSetup(gameId);
-    if (setup.canAutoFix) {
-      await this.prepareGame(gameId);
-    }
-    const game = await this.requireGame(gameId);
-    if (!isWindowsExePath(game.exePath)) {
+      const activeAttempt = this.latestActiveAttempt(gameId);
+      if (activeAttempt) {
+        return activeAttempt;
+      }
       throw new PonteError(
-        "invalid_exe",
-        "O caminho deve apontar para um ficheiro .exe.",
+        "launch_failed",
+        "Este jogo já tem uma tentativa de lançamento em andamento.",
       );
     }
-    const runtime = await this.resolveRuntime(game.runtimeKind);
-    if (!runtime) {
-      throw new PonteError(
-        "runtime_missing",
-        "Nenhum wine64 disponível. Instale o GPTK ou o Wine Gcenx e aponte o binário em Ajustes.",
+    const initialGame = await this.requireGame(gameId);
+    const attempt = this.startLaunchAttempt(initialGame);
+
+    try {
+      this.updateLaunchAttempt(gameId, attempt.id, {
+        status: "preflighting",
+        preflightFingerprint: fingerprintFor(initialGame),
+      });
+      const setup = await this.getGameSetup(gameId);
+      if (setup.canAutoFix) {
+        this.updateLaunchAttempt(gameId, attempt.id, { status: "preparing" });
+        await this.prepareGame(gameId);
+      }
+
+      const game = await this.requireGame(gameId);
+      this.updateLaunchAttempt(gameId, attempt.id, {
+        executable: game.exePath,
+        workingDir: game.installDir,
+        args: splitArgs(game.args),
+        runtimeKind: game.runtimeKind,
+        dxBackend: game.dxBackend,
+        prefixPath: game.prefixPath,
+        preflightFingerprint: fingerprintFor(game),
+      });
+      if (!isWindowsExePath(game.exePath)) {
+        throw new PonteError(
+          "invalid_exe",
+          "O caminho deve apontar para um ficheiro .exe.",
+        );
+      }
+
+      this.updateLaunchAttempt(gameId, attempt.id, { status: "probing" });
+      const runtime = await this.resolveRuntime(game.runtimeKind);
+      if (!runtime) {
+        throw new PonteError(
+          "runtime_missing",
+          "Nenhum wine64 disponível. Instale o GPTK ou o Wine Gcenx e aponte o binário em Ajustes.",
+        );
+      }
+
+      const settings = this.readSettings();
+      const env = envForBackend(game.dxBackend, { metalHud: settings.metalHud });
+      this.updateLaunchAttempt(gameId, attempt.id, {
+        status: "starting",
+        runtimePath: runtime.wine64Path,
+      });
+      this.setLaunch(gameId, "starting");
+      this.appendLog(gameId, `Motor: ${runtime.label} (${runtime.wine64Path})`);
+      this.appendLog(gameId, `Backend: ${game.dxBackend}`);
+      this.appendLog(
+        gameId,
+        `WINEDLLOVERRIDES=${env.WINEDLLOVERRIDES ?? ""}`,
       );
+      await delay(400);
+      if (game.prefixStatus !== "ready") {
+        await this.createPrefix(gameId);
+      }
+      this.appendLog(gameId, `Iniciando ${game.exePath} (simulado).`);
+      this.appendLog(
+        gameId,
+        "Neste navegador o Ponte não dispara o Wine. No Mac, use npm run tauri dev.",
+      );
+      this.setLaunch(gameId, "running");
+      this.updateLaunchAttempt(gameId, attempt.id, { status: "running" });
+      return (
+        this.launchAttempts
+          .get(gameId)
+          ?.find((item) => item.id === attempt.id) ?? attempt
+      );
+    } catch (error) {
+      const ponteError = toPonteError(error);
+      this.setLaunch(gameId, "error");
+      this.finishLaunchAttempt(gameId, attempt.id, "failed", {
+        code: ponteError.code,
+        message: ponteError.message,
+        retryable: isRetryable(ponteError.code),
+      });
+      throw ponteError;
     }
-    const settings = this.readSettings();
-    const env = envForBackend(game.dxBackend, { metalHud: settings.metalHud });
-    this.setLaunch(gameId, "starting");
-    this.appendLog(gameId, `Motor: ${runtime.label} (${runtime.wine64Path})`);
-    this.appendLog(gameId, `Backend: ${game.dxBackend}`);
-    this.appendLog(
-      gameId,
-      `WINEDLLOVERRIDES=${env.WINEDLLOVERRIDES ?? ""}`,
-    );
-    await delay(400);
-    if (game.prefixStatus !== "ready") {
-      await this.createPrefix(gameId);
-    }
-    this.appendLog(gameId, `Iniciando ${game.exePath} (simulado).`);
-    this.appendLog(
-      gameId,
-      "Neste navegador o Ponte não dispara o Wine. No Mac, use npm run tauri dev.",
-    );
-    this.setLaunch(gameId, "running");
   }
 
   async stopGame(gameId: string): Promise<void> {
@@ -357,9 +447,16 @@ export class WebPonteBackend implements PonteBackend {
       return;
     }
     this.setLaunch(gameId, "stopping");
+    const activeAttempt = this.latestActiveAttempt(gameId);
+    if (activeAttempt) {
+      this.updateLaunchAttempt(gameId, activeAttempt.id, { status: "stopping" });
+    }
     this.appendLog(gameId, "Encerrando processo (simulado).");
     await delay(200);
     this.setLaunch(gameId, "idle");
+    if (activeAttempt) {
+      this.finishLaunchAttempt(gameId, activeAttempt.id, "succeeded");
+    }
   }
 
   getLogs(gameId: string): Promise<GameLog> {
@@ -372,6 +469,147 @@ export class WebPonteBackend implements PonteBackend {
 
   getLaunchState(gameId: string): Promise<LaunchState> {
     return Promise.resolve(this.launchStates.get(gameId) ?? "idle");
+  }
+
+  async getSystemDiagnostics(): Promise<SystemDiagnostics> {
+    const [runtimes, settings] = await Promise.all([
+      this.detectRuntimes(),
+      this.getSettings(),
+    ]);
+    const stack = recommendedStack(runtimes);
+    const selected =
+      runtimes.find(
+        (runtime) => runtime.kind === stack.runtimeKind && runtime.found,
+      ) ?? firstFoundRuntime(runtimes);
+    const checks: SystemDiagnostics["checks"] = [
+      {
+        id: "runtime",
+        label: "Runtime Wine",
+        status: selected ? "pass" : "fail",
+        detail: selected
+          ? `${selected.label} encontrado (simulado).`
+          : "Nenhum runtime Wine foi encontrado.",
+        remediation: selected
+          ? undefined
+          : "Instale o Wine Staging ou configure um wine64 em Ajustes.",
+      },
+      {
+        id: "graphics",
+        label: "Backend gráfico",
+        status: selected?.supportedBackends.length ? "pass" : "fail",
+        detail: selected
+          ? `${selected.label} expõe ${selected.supportedBackends.length} backend(s) compatível(is).`
+          : "Não é possível validar os backends sem um runtime.",
+        remediation: selected?.supportedBackends.length
+          ? undefined
+          : "Instale um runtime com suporte gráfico.",
+      },
+      {
+        id: "prefixes",
+        label: "Pasta de prefixos",
+        status: settings.prefixesDir.trim() ? "pass" : "fail",
+        detail: settings.prefixesDir.trim()
+          ? settings.prefixesDir
+          : "Nenhuma pasta de prefixos foi configurada.",
+        remediation: settings.prefixesDir.trim()
+          ? undefined
+          : "Escolha uma pasta para os prefixos em Ajustes.",
+      },
+    ];
+    return {
+      checkedAt: nowIso(),
+      ready: checks.every((check) => check.status === "pass"),
+      checks,
+      selectedRuntime: selected?.kind ?? null,
+      selectedBackend: selected ? stack.dxBackend : null,
+    };
+  }
+
+  async getGamePreflight(gameId: string): Promise<GamePreflight> {
+    const game = await this.requireGame(gameId);
+    const [runtimes, setup] = await Promise.all([
+      this.detectRuntimes(),
+      this.getGameSetup(gameId),
+    ]);
+    const selectedRuntime = runtimes.find(
+      (runtime) => runtime.kind === game.runtimeKind && runtime.found,
+    );
+    const runtime = selectedRuntime;
+    const checks: GamePreflight["checks"] = [
+      {
+        id: "executable",
+        label: "Executável",
+        status: isWindowsExePath(game.exePath) ? "pass" : "fail",
+        detail: isWindowsExePath(game.exePath)
+          ? game.exePath
+          : "O caminho não aponta para um ficheiro .exe.",
+        remediation: isWindowsExePath(game.exePath)
+          ? undefined
+          : "Escolha novamente a pasta do jogo.",
+      },
+      {
+        id: "runtime",
+        label: "Runtime selecionado",
+        status: runtime ? "pass" : "fail",
+        detail: runtime
+          ? `${runtime.label} está disponível.`
+          : "Nenhum runtime Wine está disponível.",
+        remediation: runtime
+          ? undefined
+          : "Instale o runtime recomendado ou escolha um wine64 disponível.",
+      },
+      {
+        id: "backend",
+        label: "Backend gráfico",
+        status: runtime?.supportedBackends.includes(game.dxBackend)
+          ? "pass"
+          : "fail",
+        detail: runtime?.supportedBackends.includes(game.dxBackend)
+          ? `${game.dxBackend} é compatível com o runtime disponível.`
+          : "O backend escolhido não é compatível com o runtime disponível.",
+        remediation: runtime?.supportedBackends.includes(game.dxBackend)
+          ? undefined
+          : "Escolha outro backend DirectX ou instale um runtime compatível.",
+      },
+      {
+        id: "dependencies",
+        label: "Prefixo e dependências",
+        status: setup.items.every((item) => item.status === "ready")
+          ? "pass"
+          : "warning",
+        detail: setup.items.every((item) => item.status === "ready")
+          ? "Prefixo, DirectX e Visual C++ estão prontos."
+          : "Ainda há componentes que podem ser preparados automaticamente.",
+        remediation: setup.items.every((item) => item.status === "ready")
+          ? undefined
+          : "Execute a preparação do jogo antes de iniciar.",
+      },
+    ];
+    const hasFailure = checks.some((check) => check.status === "fail");
+    const hasWarning = checks.some((check) => check.status === "warning");
+    return {
+      gameId: game.id,
+      executable: game.exePath,
+      fingerprint: fingerprintFor(game),
+      engineGuess: setup.engineGuess,
+      status: hasFailure ? "blocked" : hasWarning ? "warning" : "ready",
+      checks,
+      recommendedRuntime: setup.recommendedRuntime,
+      recommendedBackend: setup.recommendedBackend,
+    };
+  }
+
+  listLaunchAttempts(gameId: string, limit?: number): Promise<LaunchAttempt[]> {
+    const attempts = [...(this.launchAttempts.get(gameId) ?? [])]
+      .reverse()
+      .map((attempt) => ({
+        ...attempt,
+        failure: attempt.failure ? { ...attempt.failure } : undefined,
+      }));
+    if (limit === undefined) {
+      return Promise.resolve(attempts);
+    }
+    return Promise.resolve(attempts.slice(0, Math.max(0, Math.trunc(limit))));
   }
 
   getSettings(): Promise<Settings> {
@@ -433,14 +671,84 @@ export class WebPonteBackend implements PonteBackend {
     if (match) {
       return match;
     }
-    if (kind === "custom") {
-      return null;
-    }
-    return firstFoundRuntime(runtimes) ?? null;
+    return null;
   }
 
   private setLaunch(gameId: string, state: LaunchState): void {
     this.launchStates.set(gameId, state);
+  }
+
+  private startLaunchAttempt(game: Game): LaunchAttempt {
+    const now = nowIso();
+    const attempt: LaunchAttempt = {
+      id: crypto.randomUUID(),
+      gameId: game.id,
+      status: "queued",
+      startedAt: now,
+      updatedAt: now,
+      executable: game.exePath,
+      workingDir: game.installDir || parentPath(game.exePath),
+      args: splitArgs(game.args),
+      runtimeKind: game.runtimeKind,
+      runtimePath: "",
+      dxBackend: game.dxBackend,
+      prefixPath: game.prefixPath,
+    };
+    const attempts = this.launchAttempts.get(game.id) ?? [];
+    attempts.push(attempt);
+    this.launchAttempts.set(game.id, attempts);
+    return attempt;
+  }
+
+  private updateLaunchAttempt(
+    gameId: string,
+    attemptId: string,
+    patch: Partial<LaunchAttempt>,
+  ): void {
+    const attempts = this.launchAttempts.get(gameId);
+    const index = attempts?.findIndex((attempt) => attempt.id === attemptId) ?? -1;
+    if (!attempts || index < 0) {
+      return;
+    }
+    attempts[index] = {
+      ...attempts[index],
+      ...patch,
+      updatedAt: nowIso(),
+    };
+  }
+
+  private latestActiveAttempt(gameId: string): LaunchAttempt | undefined {
+    const attempts = this.launchAttempts.get(gameId) ?? [];
+    return [...attempts]
+      .reverse()
+      .find((attempt) =>
+        ["queued", "preflighting", "preparing", "probing", "starting", "running", "stopping"].includes(
+          attempt.status,
+        ),
+      );
+  }
+
+  private finishLaunchAttempt(
+    gameId: string,
+    attemptId: string,
+    status: "succeeded" | "failed" | "blocked" | "interrupted",
+    failure?: LaunchFailure,
+  ): void {
+    const attempts = this.launchAttempts.get(gameId);
+    const attempt = attempts?.find((item) => item.id === attemptId);
+    if (!attempt) {
+      return;
+    }
+    const finishedAt = nowIso();
+    const startedAt = Date.parse(attempt.startedAt);
+    this.updateLaunchAttempt(gameId, attemptId, {
+      status,
+      finishedAt,
+      durationMs: Number.isNaN(startedAt)
+        ? undefined
+        : Math.max(0, Date.parse(finishedAt) - startedAt),
+      failure,
+    });
   }
 
   private appendLog(gameId: string, message: string): void {

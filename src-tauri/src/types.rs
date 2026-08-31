@@ -136,6 +136,126 @@ pub struct GameDiscovery {
     pub can_auto_fix: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CheckStatus {
+    Pass,
+    Warning,
+    Fail,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticCheck {
+    pub id: String,
+    pub label: String,
+    pub status: CheckStatus,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemDiagnostics {
+    pub checked_at: String,
+    pub ready: bool,
+    pub checks: Vec<DiagnosticCheck>,
+    pub selected_runtime: Option<RuntimeKind>,
+    pub selected_backend: Option<DxBackend>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PreflightStatus {
+    Ready,
+    Warning,
+    Blocked,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreflightCheck {
+    pub id: String,
+    pub label: String,
+    pub status: CheckStatus,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GamePreflight {
+    pub game_id: String,
+    pub executable: String,
+    pub fingerprint: String,
+    pub engine_guess: EngineGuess,
+    pub status: PreflightStatus,
+    pub checks: Vec<PreflightCheck>,
+    pub recommended_runtime: RuntimeKind,
+    pub recommended_backend: DxBackend,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LaunchAttemptStatus {
+    Queued,
+    Preflighting,
+    Preparing,
+    Probing,
+    Starting,
+    Running,
+    Stopping,
+    Succeeded,
+    Failed,
+    Blocked,
+    Interrupted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchFailure {
+    pub code: String,
+    pub message: String,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchAttempt {
+    pub id: String,
+    pub game_id: String,
+    pub status: LaunchAttemptStatus,
+    pub started_at: String,
+    pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    pub executable: String,
+    pub working_dir: String,
+    pub args: Vec<String>,
+    pub runtime_kind: RuntimeKind,
+    pub runtime_path: String,
+    pub dx_backend: DxBackend,
+    pub prefix_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preflight_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<LaunchFailure>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddGameInput {

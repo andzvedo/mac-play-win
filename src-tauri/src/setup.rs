@@ -1,7 +1,10 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
+
+use sha2::{Digest, Sha256};
 
 use crate::error::CommandError;
 use crate::launch::{self, LaunchRegistry};
@@ -15,8 +18,11 @@ use crate::types::{
 const DXVK_URL: &str =
     "https://github.com/Gcenx/DXVK-macOS/releases/download/v1.10.3-20230507-repack/dxvk-macOS-async-v1.10.3-20230507-repack.tar.gz";
 const DXVK_MARKER: &str = ".ponte-dxvk-1.10.3";
-const BREW_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(180);
+const WINE_STAGING_URL: &str =
+    "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.16/wine-staging-11.16-osx64.tar.xz";
+const WINE_STAGING_SHA256: &str =
+    "cd68f230c773a761b8a0423a08c51fbe49e89b6e52246f3866898d259a4988c6";
 
 pub fn guess_engine(exe: &Path) -> EngineGuess {
     let Some(dir) = exe.parent() else {
@@ -26,7 +32,10 @@ pub fn guess_engine(exe: &Path) -> EngineGuess {
         || dir.join("GameAssembly.dll").is_file()
         || exe
             .file_stem()
-            .map(|stem| dir.join(format!("{}_Data", stem.to_string_lossy())).is_dir())
+            .map(|stem| {
+                dir.join(format!("{}_Data", stem.to_string_lossy()))
+                    .is_dir()
+            })
             .unwrap_or(false)
     {
         return EngineGuess::Unity;
@@ -58,32 +67,20 @@ pub fn guess_engine(exe: &Path) -> EngineGuess {
         }
         ancestor = current.parent();
     }
-    if looks_shipping || in_binaries_win64 || has_engine || dir.join("UnrealGame.exe").is_file()
-    {
+    if looks_shipping || in_binaries_win64 || has_engine || dir.join("UnrealGame.exe").is_file() {
         return EngineGuess::Unreal;
     }
     EngineGuess::Unknown
 }
 
-fn brew_bin() -> Option<PathBuf> {
-    [
-        PathBuf::from("/opt/homebrew/bin/brew"),
-        PathBuf::from("/usr/local/bin/brew"),
-    ]
-    .into_iter()
-    .find(|path| path.is_file())
-}
-
 pub(crate) fn prefix_has_dxvk(prefix: &Path) -> bool {
-    prefix.join("drive_c/windows/system32").join(DXVK_MARKER).is_file()
+    prefix
+        .join("drive_c/windows/system32")
+        .join(DXVK_MARKER)
+        .is_file()
 }
 
-fn item(
-    id: &str,
-    label: &str,
-    status: SetupItemStatus,
-    detail: impl Into<String>,
-) -> SetupItem {
+fn item(id: &str, label: &str, status: SetupItemStatus, detail: impl Into<String>) -> SetupItem {
     SetupItem {
         id: id.to_string(),
         label: label.to_string(),
@@ -99,6 +96,12 @@ pub fn recommended_stack_for_engine(engine: &EngineGuess) -> (RuntimeKind, DxBac
 fn pick_stack(runtimes: &[Runtime], _engine: &EngineGuess) -> (RuntimeKind, DxBackend) {
     if runtimes
         .iter()
+        .any(|item| item.kind == RuntimeKind::GcenxStaging && item.found)
+    {
+        return (RuntimeKind::GcenxStaging, DxBackend::Dxvk);
+    }
+    if runtimes
+        .iter()
         .any(|item| item.kind == RuntimeKind::Gptk && item.found)
     {
         return (RuntimeKind::Gptk, DxBackend::D3dmetal);
@@ -112,16 +115,6 @@ fn pick_stack(runtimes: &[Runtime], _engine: &EngineGuess) -> (RuntimeKind, DxBa
             return (RuntimeKind::Crossover, DxBackend::D3dmetal);
         }
         return (RuntimeKind::Crossover, DxBackend::Dxvk);
-    }
-    if let Some(staging) = runtimes
-        .iter()
-        .find(|item| item.kind == RuntimeKind::GcenxStaging && item.found)
-    {
-        let path = Path::new(&staging.wine64_path);
-        if backend_available(path, &DxBackend::Dxmt) {
-            return (RuntimeKind::GcenxStaging, DxBackend::Dxmt);
-        }
-        return (RuntimeKind::GcenxStaging, DxBackend::Dxvk);
     }
     if runtimes
         .iter()
@@ -166,19 +159,12 @@ pub fn plan_for_game(game: &Game) -> GameSetupPlan {
             SetupItemStatus::Ready,
             format!("{} (fallback)", any.label),
         )
-    } else if brew_bin().is_some() {
-        item(
-            "runtime",
-            "Wine",
-            SetupItemStatus::Installable,
-            "Nenhum wine64. O Ponte pode instalar o Wine Staging via Homebrew.",
-        )
     } else {
         item(
             "runtime",
             "Wine",
-            SetupItemStatus::Manual,
-            "Instale o Homebrew e o Wine Staging, ou o Game Porting Toolkit.",
+            SetupItemStatus::Installable,
+            "Nenhum wine64. O Ponte pode instalar o Wine Staging gerenciado e validado.",
         )
     };
 
@@ -235,7 +221,7 @@ pub fn plan_for_game(game: &Game) -> GameSetupPlan {
             SetupItemStatus::Ready,
             prefix.display().to_string(),
         )
-    } else if found || brew_bin().is_some() {
+    } else if found {
         item(
             "prefix",
             "Prefixo Wine",
@@ -266,7 +252,7 @@ pub fn plan_for_game(game: &Game) -> GameSetupPlan {
             SetupItemStatus::Installable,
             "Já está na cache do Ponte; copia-se para este prefixo sem o instalador da Microsoft.",
         )
-    } else if found || brew_bin().is_some() {
+    } else if found {
         item(
             "vcrun",
             "Visual C++",
@@ -363,93 +349,250 @@ fn run_timed(
     }
 }
 
-fn brew_cask_installed(name: &str) -> bool {
-    let Some(brew) = brew_bin() else {
-        return false;
-    };
-    Command::new(brew)
-        .args(["list", "--cask", name])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
-
-fn install_wine_staging(registry: &LaunchRegistry, game_id: &str) -> Result<(), CommandError> {
-    if detect_runtimes().iter().any(|item| item.found) {
-        launch::append_log(registry, game_id, "Wine já está instalado. Nada a descarregar.");
-        return Ok(());
-    }
-    if brew_cask_installed("wine@staging") || brew_cask_installed("wine-stable") {
-        launch::append_log(
-            registry,
-            game_id,
-            "O cask do Wine já está no Homebrew. Nada a instalar.",
-        );
-        return Ok(());
-    }
-    let brew = brew_bin().ok_or_else(|| {
+fn file_sha256(path: &Path) -> Result<String, CommandError> {
+    let mut file = fs::File::open(path).map_err(|err| {
         CommandError::new(
             "setup_failed",
-            "Homebrew não encontrado. Instale-o e tente de novo.",
+            format!("Não foi possível ler {}: {err}", path.display()),
         )
     })?;
-    launch::append_log(
-        registry,
-        game_id,
-        "A instalar Wine Staging (Gcenx) com Homebrew. Pode demorar vários minutos…",
-    );
-    let child = Command::new(&brew)
-        .args(["install", "--cask", "--no-quarantine", "wine@staging"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| {
-            CommandError::new("setup_failed", format!("Falha ao iniciar o brew: {err}"))
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|err| {
+            CommandError::new(
+                "setup_failed",
+                format!("Falha ao calcular SHA-256 de {}: {err}", path.display()),
+            )
         })?;
-    let status = run_timed(
-        child,
-        BREW_TIMEOUT,
-        "A instalação do Wine Staging excedeu 20 minutos.",
-    )?;
-    if !status.success() {
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn find_bundle(root: &Path, name: &str) -> Option<PathBuf> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if dir.file_name().and_then(|value| value.to_str()) == Some(name) && dir.is_dir() {
+            return Some(dir);
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                stack.push(entry.path());
+            }
+        }
+    }
+    None
+}
+
+fn managed_staging_root() -> Result<PathBuf, CommandError> {
+    Ok(ensure_ponte_dir()?.join("runtimes/wine-staging/11.16"))
+}
+
+fn install_managed_wine_staging(
+    registry: &LaunchRegistry,
+    game_id: &str,
+) -> Result<(), CommandError> {
+    if detect_runtimes()
+        .iter()
+        .any(|item| item.kind == RuntimeKind::GcenxStaging && item.found)
+    {
         launch::append_log(
             registry,
             game_id,
-            "wine@staging falhou. A tentar wine-stable…",
+            "Wine Staging (Gcenx) gerenciado já está pronto. Nada a descarregar.",
         );
-        let child = Command::new(&brew)
-            .args(["install", "--cask", "--no-quarantine", "wine-stable"])
-            .stdout(Stdio::piped())
+        return Ok(());
+    }
+
+    let root = managed_staging_root()?;
+    let cache = ensure_ponte_dir()?.join("cache");
+    fs::create_dir_all(&cache).map_err(|err| {
+        CommandError::new(
+            "setup_failed",
+            format!("Não foi possível criar a cache: {err}"),
+        )
+    })?;
+    fs::create_dir_all(&root).map_err(|err| {
+        CommandError::new(
+            "setup_failed",
+            format!("Não foi possível criar o runtime gerenciado: {err}"),
+        )
+    })?;
+
+    let archive = cache.join("wine-staging-11.16-osx64.tar.xz");
+    let archive_valid = archive.is_file()
+        && file_sha256(&archive)
+            .map(|actual| actual.eq_ignore_ascii_case(WINE_STAGING_SHA256))
+            .unwrap_or(false);
+    if !archive_valid {
+        launch::append_log(
+            registry,
+            game_id,
+            "A descarregar Wine Staging 11.16 (Gcenx) para a cache gerenciada…",
+        );
+        let partial = archive.with_extension("tar.xz.partial");
+        let _ = fs::remove_file(&partial);
+        let partial_text = partial.to_string_lossy().into_owned();
+        let child = Command::new("curl")
+            .args([
+                "-fsSL",
+                "--retry",
+                "3",
+                "-o",
+                &partial_text,
+                WINE_STAGING_URL,
+            ])
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|err| {
-                CommandError::new("setup_failed", format!("Falha ao iniciar o brew: {err}"))
+                CommandError::new(
+                    "setup_failed",
+                    format!("Falha ao descarregar o Wine: {err}"),
+                )
             })?;
         let status = run_timed(
             child,
-            BREW_TIMEOUT,
-            "A instalação do Wine Stable excedeu 20 minutos.",
+            DOWNLOAD_TIMEOUT,
+            "O download do Wine Staging excedeu 3 minutos.",
         )?;
+        if !status.success() {
+            let _ = fs::remove_file(&partial);
+            return Err(CommandError::new(
+                "setup_failed",
+                "Não foi possível descarregar o Wine Staging gerenciado.",
+            ));
+        }
+        let actual = file_sha256(&partial)?;
+        if !actual.eq_ignore_ascii_case(WINE_STAGING_SHA256) {
+            let _ = fs::remove_file(&partial);
+            return Err(CommandError::new(
+                "setup_failed",
+                "A assinatura SHA-256 do Wine Staging não corresponde ao manifesto esperado.",
+            ));
+        }
+        let _ = fs::remove_file(&archive);
+        fs::rename(&partial, &archive).map_err(|err| {
+            CommandError::new(
+                "setup_failed",
+                format!("Não foi possível guardar o Wine Staging na cache: {err}"),
+            )
+        })?;
+    } else {
+        launch::append_log(
+            registry,
+            game_id,
+            "Wine Staging encontrado na cache; a reutilizar sem novo download.",
+        );
+    }
+
+    let target = root.join("Wine Staging.app");
+    if target.join("Contents/Resources/wine/bin/wine").is_file() {
+        launch::append_log(
+            registry,
+            game_id,
+            "Wine Staging gerenciado já está instalado.",
+        );
+        return Ok(());
+    }
+    if target.exists() {
+        return Err(CommandError::new(
+            "setup_failed",
+            format!(
+                "Runtime gerenciado incompleto em {}; remova-o manualmente para tentar de novo.",
+                target.display()
+            ),
+        ));
+    }
+
+    let extract = cache.join(format!("wine-staging-11.16-extract-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&extract);
+    fs::create_dir_all(&extract).map_err(|err| {
+        CommandError::new(
+            "setup_failed",
+            format!("Não foi possível preparar extração: {err}"),
+        )
+    })?;
+    let status = Command::new("tar")
+        .args(["-xJf"])
+        .arg(&archive)
+        .arg("-C")
+        .arg(&extract)
+        .status()
+        .map_err(|err| {
+            CommandError::new("setup_failed", format!("Falha ao extrair o Wine: {err}"))
+        })?;
+    if !status.success() {
+        let _ = fs::remove_dir_all(&extract);
+        return Err(CommandError::new(
+            "setup_failed",
+            "Não foi possível extrair o Wine Staging gerenciado.",
+        ));
+    }
+    let bundle = find_bundle(&extract, "Wine Staging.app").ok_or_else(|| {
+        CommandError::new(
+            "setup_failed",
+            "O arquivo do Wine Staging não contém um Wine Staging.app válido.",
+        )
+    })?;
+    fs::rename(&bundle, &target).map_err(|err| {
+        CommandError::new(
+            "setup_failed",
+            format!("Não foi possível instalar o bundle gerenciado: {err}"),
+        )
+    })?;
+    let _ = fs::remove_dir_all(&extract);
+    if cfg!(target_os = "macos") {
+        let status = Command::new("xattr")
+            .args(["-dr", "com.apple.quarantine"])
+            .arg(&target)
+            .status()
+            .map_err(|err| {
+                CommandError::new("setup_failed", format!("Falha ao validar o bundle: {err}"))
+            })?;
         if !status.success() {
             return Err(CommandError::new(
                 "setup_failed",
-                format!("O Homebrew não conseguiu instalar o Wine ({status})."),
+                "O macOS manteve a quarentena no Wine Staging gerenciado.",
             ));
         }
     }
-    launch::append_log(registry, game_id, "Wine instalado.");
+    if !detect_runtimes()
+        .iter()
+        .any(|item| item.kind == RuntimeKind::GcenxStaging && item.found)
+    {
+        return Err(CommandError::new(
+            "setup_failed",
+            "Wine Staging foi extraído, mas não passou a validação de kernel32 x64.",
+        ));
+    }
+    launch::append_log(
+        registry,
+        game_id,
+        "Wine Staging gerenciado instalado e validado.",
+    );
     Ok(())
+}
+
+fn install_wine_staging(registry: &LaunchRegistry, game_id: &str) -> Result<(), CommandError> {
+    install_managed_wine_staging(registry, game_id)
 }
 
 fn find_named_dir(root: &Path, name: &str) -> Option<PathBuf> {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        if dir.file_name().and_then(|value| value.to_str()) == Some(name) && dir.is_dir() {
-            if dir.join("d3d11.dll").is_file() {
-                return Some(dir);
-            }
+        if dir.file_name().and_then(|value| value.to_str()) == Some(name)
+            && dir.is_dir()
+            && dir.join("d3d11.dll").is_file()
+        {
+            return Some(dir);
         }
         if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {
@@ -465,7 +608,10 @@ fn find_named_dir(root: &Path, name: &str) -> Option<PathBuf> {
 
 fn copy_dir_dlls(from: &Path, to: &Path) -> Result<(), CommandError> {
     fs::create_dir_all(to).map_err(|err| {
-        CommandError::new("setup_failed", format!("Não foi possível criar {to:?}: {err}"))
+        CommandError::new(
+            "setup_failed",
+            format!("Não foi possível criar {to:?}: {err}"),
+        )
     })?;
     for entry in fs::read_dir(from).map_err(|err| {
         CommandError::new("setup_failed", format!("Não foi possível ler DXVK: {err}"))
@@ -499,7 +645,10 @@ fn ensure_dxvk(
     }
     let cache = ensure_ponte_dir()?.join("cache");
     fs::create_dir_all(&cache).map_err(|err| {
-        CommandError::new("setup_failed", format!("Não foi possível criar a cache: {err}"))
+        CommandError::new(
+            "setup_failed",
+            format!("Não foi possível criar a cache: {err}"),
+        )
     })?;
     let archive = cache.join("dxvk-macos-1.10.3.tar.gz");
     if !archive.is_file() || archive.metadata().map(|meta| meta.len()).unwrap_or(0) < 100_000 {
@@ -515,7 +664,10 @@ fn ensure_dxvk(
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|err| {
-                CommandError::new("setup_failed", format!("Falha ao descarregar o DXVK: {err}"))
+                CommandError::new(
+                    "setup_failed",
+                    format!("Falha ao descarregar o DXVK: {err}"),
+                )
             })?;
         let status = run_timed(
             child,
@@ -713,9 +865,7 @@ pub fn game_is_ready(game: &Game) -> bool {
                     .unwrap_or(false)
         }
         DxBackend::D3dmetal => resolve_wine(&game.runtime_kind)
-            .map(|runtime| {
-                backend_available(Path::new(&runtime.wine64_path), &DxBackend::D3dmetal)
-            })
+            .map(|runtime| backend_available(Path::new(&runtime.wine64_path), &DxBackend::D3dmetal))
             .unwrap_or(false),
         DxBackend::Dxmt => resolve_wine(&game.runtime_kind)
             .map(|runtime| backend_available(Path::new(&runtime.wine64_path), &DxBackend::Dxmt))
@@ -786,7 +936,10 @@ pub fn prepare_game(registry: &LaunchRegistry, game_id: &str) -> Result<Game, Co
     let plan = plan_for_game(&game);
     launch::append_log(registry, game_id, &plan.summary);
 
-    if !detect_runtimes().iter().any(|item| item.found) {
+    if !detect_runtimes()
+        .iter()
+        .any(|item| item.kind == RuntimeKind::GcenxStaging && item.found)
+    {
         install_wine_staging(registry, game_id)?;
     }
 
@@ -816,11 +969,7 @@ pub fn prepare_game(registry: &LaunchRegistry, game_id: &str) -> Result<Game, Co
             );
         }
         if stored.args != game.args {
-            launch::append_log(
-                registry,
-                game_id,
-                &format!("Argumentos: {}", stored.args),
-            );
+            launch::append_log(registry, game_id, &format!("Argumentos: {}", stored.args));
         }
     };
     write_library(&library)?;
@@ -853,11 +1002,15 @@ pub fn prepare_game(registry: &LaunchRegistry, game_id: &str) -> Result<Game, Co
 
 pub fn install_runtime(kind: &RuntimeKind) -> Result<(), CommandError> {
     match kind {
-        RuntimeKind::GcenxStaging | RuntimeKind::Winehq => {
+        RuntimeKind::GcenxStaging => {
             let dummy = LaunchRegistry::new();
             install_wine_staging(&dummy, "setup")?;
             Ok(())
         }
+        RuntimeKind::Winehq => Err(CommandError::new(
+            "setup_failed",
+            "O WineHQ Stable é detectado, mas não é instalado automaticamente. O Ponte usa o Wine Staging gerenciado para DirectX 11.",
+        )),
         RuntimeKind::Gptk => Err(CommandError::new(
             "setup_failed",
             "O Game Porting Toolkit não se instala daqui. Use o site da Apple ou o tap Homebrew apple/apple.",

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check } from "lucide-react";
+import { SystemDiagnosticsCard } from "@/components/system-diagnostics-card";
 import { RuntimeBanner } from "@/components/runtime-banner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +23,8 @@ export function SettingsPage() {
     pickWine,
     pickDirectory,
     installRuntime,
+    systemDiagnostics,
+    getSystemDiagnostics,
   } = usePonte();
   const [installing, setInstalling] = useState<RuntimeKind | null>(null);
   const [customWinePath, setCustomWinePath] = useState(settings.customWinePath);
@@ -81,12 +84,19 @@ export function SettingsPage() {
         <h1 className="font-heading text-2xl font-semibold">Ajustes</h1>
         <p className="text-sm text-muted-foreground">
           O Ponte não empacota Wine nem D3DMetal. Ele detecta o que já está no
-          Mac, instala o Wine Staging via Homebrew se faltar, e dispara o .exe
-          local.
+          Mac, instala o Wine Staging gerenciado se faltar, valida o runtime e
+          dispara o .exe local.
         </p>
       </div>
 
       <RuntimeBanner foundCount={foundRuntimes.length} />
+
+      <SystemDiagnosticsCard
+        diagnostics={systemDiagnostics}
+        onRefresh={() => {
+          void getSystemDiagnostics();
+        }}
+      />
 
       <section className="space-y-3">
         <h2 className="font-heading text-sm font-medium">Motores detectados</h2>

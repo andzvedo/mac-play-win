@@ -14,11 +14,14 @@ import type {
   AddGameInput,
   Game,
   GameDiscovery,
+  GamePreflight,
   GameSetupPlan,
   LaunchState,
+  LaunchAttempt,
   Runtime,
   RuntimeKind,
   Settings,
+  SystemDiagnostics,
 } from "@/lib/types";
 import { DEFAULT_PREFIXES_DIR } from "@/lib/types";
 
@@ -30,6 +33,9 @@ interface PonteContextValue {
   settings: Settings;
   launch: Record<string, LaunchState>;
   logs: Record<string, string[]>;
+  systemDiagnostics: SystemDiagnostics | null;
+  preflights: Record<string, GamePreflight>;
+  launchAttempts: Record<string, LaunchAttempt[]>;
   actionError: string | null;
   foundRuntimes: Runtime[];
   refresh: () => Promise<void>;
@@ -44,6 +50,9 @@ interface PonteContextValue {
   createPrefix: (id: string, wipe?: boolean) => Promise<void>;
   installVcrun: (id: string) => Promise<void>;
   getGameSetup: (id: string) => Promise<GameSetupPlan>;
+  getSystemDiagnostics: () => Promise<SystemDiagnostics>;
+  getGamePreflight: (id: string) => Promise<GamePreflight>;
+  listLaunchAttempts: (id: string, limit?: number) => Promise<LaunchAttempt[]>;
   prepareGame: (id: string) => Promise<Game>;
   installRuntime: (kind: RuntimeKind) => Promise<void>;
   launchGame: (id: string) => Promise<void>;
@@ -67,13 +76,22 @@ export function PonteProvider({ children }: { children: ReactNode }) {
   });
   const [launch, setLaunch] = useState<Record<string, LaunchState>>({});
   const [logs, setLogs] = useState<Record<string, string[]>>({});
+  const [systemDiagnostics, setSystemDiagnostics] =
+    useState<SystemDiagnostics | null>(null);
+  const [preflights, setPreflights] = useState<Record<string, GamePreflight>>(
+    {},
+  );
+  const [launchAttempts, setLaunchAttempts] = useState<
+    Record<string, LaunchAttempt[]>
+  >({});
   const [actionError, setActionError] = useState<string | null>(null);
 
   const refreshGameMeta = useCallback(
     async (id: string) => {
-      const [state, log] = await Promise.all([
+      const [state, log, attempts] = await Promise.all([
         backend.getLaunchState(id),
         backend.getLogs(id),
+        backend.listLaunchAttempts(id, 10),
       ]);
       setLaunch((current) =>
         current[id] === state ? current : { ...current, [id]: state },
@@ -83,6 +101,7 @@ export function PonteProvider({ children }: { children: ReactNode }) {
           ? current
           : { ...current, [id]: log.lines },
       );
+      setLaunchAttempts((current) => ({ ...current, [id]: attempts }));
     },
     [backend],
   );
@@ -145,6 +164,9 @@ export function PonteProvider({ children }: { children: ReactNode }) {
       settings,
       launch,
       logs,
+      systemDiagnostics,
+      preflights,
+      launchAttempts,
       actionError,
       foundRuntimes: runtimes.filter((item) => item.found),
       refresh,
@@ -163,6 +185,16 @@ export function PonteProvider({ children }: { children: ReactNode }) {
       removeGame: (id) =>
         runAction(async () => {
           await backend.removeGame(id);
+          setPreflights((current) => {
+            const next = { ...current };
+            delete next[id];
+            return next;
+          });
+          setLaunchAttempts((current) => {
+            const next = { ...current };
+            delete next[id];
+            return next;
+          });
           await refresh();
         }),
       pickExe: () => backend.pickExe(),
@@ -182,6 +214,24 @@ export function PonteProvider({ children }: { children: ReactNode }) {
           await refreshGameMeta(id);
         }),
       getGameSetup: (id) => backend.getGameSetup(id),
+      getSystemDiagnostics: () =>
+        runAction(async () => {
+          const diagnostics = await backend.getSystemDiagnostics();
+          setSystemDiagnostics(diagnostics);
+          return diagnostics;
+        }),
+      getGamePreflight: (id) =>
+        runAction(async () => {
+          const preflight = await backend.getGamePreflight(id);
+          setPreflights((current) => ({ ...current, [id]: preflight }));
+          return preflight;
+        }),
+      listLaunchAttempts: (id, limit) =>
+        runAction(async () => {
+          const attempts = await backend.listLaunchAttempts(id, limit);
+          setLaunchAttempts((current) => ({ ...current, [id]: attempts }));
+          return attempts;
+        }),
       prepareGame: (id) =>
         runAction(async () => {
           setLaunch((current) => ({ ...current, [id]: "starting" }));
@@ -198,7 +248,14 @@ export function PonteProvider({ children }: { children: ReactNode }) {
       launchGame: (id) =>
         runAction(async () => {
           setLaunch((current) => ({ ...current, [id]: "starting" }));
-          await backend.launchGame(id);
+          const attempt = await backend.launchGame(id);
+          setLaunchAttempts((current) => ({
+            ...current,
+            [id]: [
+              attempt,
+              ...(current[id] ?? []).filter((item) => item.id !== attempt.id),
+            ],
+          }));
           await refresh();
           await refreshGameMeta(id);
         }),
@@ -222,12 +279,15 @@ export function PonteProvider({ children }: { children: ReactNode }) {
       launch,
       loading,
       logs,
+      launchAttempts,
       ready,
+      preflights,
       refresh,
       refreshGameMeta,
       runAction,
       runtimes,
       settings,
+      systemDiagnostics,
     ],
   );
 

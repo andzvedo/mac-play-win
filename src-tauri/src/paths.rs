@@ -81,11 +81,7 @@ mod tests {
             dir,
             "other",
         ));
-        assert!(!prefix_is_owned(
-            Path::new("/etc/abc-id"),
-            dir,
-            "abc-id",
-        ));
+        assert!(!prefix_is_owned(Path::new("/etc/abc-id"), dir, "abc-id",));
         assert!(!prefix_is_owned(
             Path::new("/tmp/ponte/prefixes/abc-id"),
             Path::new("/"),

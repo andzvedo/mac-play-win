@@ -1,8 +1,11 @@
+mod attempts;
+mod diagnostics;
 mod discover;
 mod env_backend;
 mod error;
 mod launch;
 mod paths;
+mod preflight;
 mod runtimes;
 mod setup;
 mod storage;
@@ -18,8 +21,8 @@ use uuid::Uuid;
 use error::CommandError;
 use storage::{expand_home, read_library, read_settings, write_library, write_settings};
 use types::{
-    AddGameInput, Game, GameDiscovery, GameLog, GameSetupPlan, LaunchState, LibraryFile,
-    PrefixStatus, Runtime, RuntimeKind, Settings,
+    AddGameInput, Game, GameDiscovery, GameLog, GamePreflight, GameSetupPlan, LaunchAttempt,
+    LaunchState, LibraryFile, PrefixStatus, Runtime, RuntimeKind, Settings, SystemDiagnostics,
 };
 
 struct AppState {
@@ -227,6 +230,47 @@ fn get_game_setup(id: String) -> Result<GameSetupPlan, CommandError> {
     Ok(setup::plan_for_game(&game))
 }
 
+#[tauri::command]
+fn get_system_diagnostics() -> SystemDiagnostics {
+    diagnostics::collect()
+}
+
+#[tauri::command]
+fn get_game_preflight(id: String) -> Result<GamePreflight, CommandError> {
+    let game = find_game(&read_library()?, &id)?;
+    Ok(preflight::inspect(&game))
+}
+
+#[tauri::command]
+fn get_launch_attempts(
+    game_id: String,
+    limit: Option<usize>,
+) -> Result<Vec<LaunchAttempt>, CommandError> {
+    let mut attempts = attempts::list(&game_id)?;
+    if let Some(limit) = limit {
+        attempts.truncate(limit);
+    }
+    Ok(attempts)
+}
+
+#[tauri::command]
+fn list_launch_attempts(
+    game_id: String,
+    limit: Option<usize>,
+) -> Result<Vec<LaunchAttempt>, CommandError> {
+    get_launch_attempts(game_id, limit)
+}
+
+#[tauri::command]
+fn get_launch_attempt(game_id: String, attempt_id: String) -> Result<LaunchAttempt, CommandError> {
+    attempts::read(&game_id, &attempt_id)
+}
+
+#[tauri::command]
+fn get_launch_attempt_log(game_id: String, attempt_id: String) -> Result<GameLog, CommandError> {
+    attempts::log(&game_id, &attempt_id)
+}
+
 #[tauri::command(async)]
 fn prepare_game(game_id: String, state: State<AppState>) -> Result<Game, CommandError> {
     setup::prepare_game(state.launch.as_ref(), &game_id)
@@ -239,14 +283,39 @@ fn install_runtime(kind: RuntimeKind) -> Result<Vec<Runtime>, CommandError> {
 }
 
 #[tauri::command(async)]
-fn launch_game(game_id: String, state: State<AppState>) -> Result<(), CommandError> {
+fn launch_game(game_id: String, state: State<AppState>) -> Result<LaunchAttempt, CommandError> {
     let library = read_library()?;
     let game = find_game(&library, &game_id)?;
-    if !setup::game_is_ready(&game) {
-        if runtimes::resolve_wine(&game.runtime_kind).is_some() {
-            setup::ensure_prefix_deps(state.launch.as_ref(), &game_id)?;
-        } else {
-            setup::prepare_game(state.launch.as_ref(), &game_id)?;
+    let preflight = preflight::inspect(&game);
+    if preflight.status == types::PreflightStatus::Blocked {
+        let reason = preflight
+            .checks
+            .iter()
+            .find(|check| check.status == types::CheckStatus::Fail)
+            .map(|check| check.detail.clone())
+            .unwrap_or_else(|| "O preflight bloqueou este lançamento.".to_string());
+        let _ = attempts::record_failure(
+            &game,
+            types::LaunchAttemptStatus::Blocked,
+            "launch_blocked",
+            &reason,
+            Some(preflight.fingerprint),
+        );
+        return Err(CommandError::new("launch_blocked", reason));
+    }
+    let setup_plan = setup::plan_for_game(&game);
+    let stack_changed = game.runtime_kind != setup_plan.recommended_runtime
+        || game.dx_backend != setup_plan.recommended_backend;
+    if !setup::game_is_ready(&game) || stack_changed {
+        if let Err(error) = setup::prepare_game(state.launch.as_ref(), &game_id) {
+            let _ = attempts::record_failure(
+                &game,
+                types::LaunchAttemptStatus::Failed,
+                &error.code,
+                &error.message,
+                Some(preflight.fingerprint),
+            );
+            return Err(error);
         }
     }
     let library = read_library()?;
@@ -320,6 +389,12 @@ pub fn run() {
             resolve_game_folder,
             create_prefix,
             get_game_setup,
+            get_system_diagnostics,
+            get_game_preflight,
+            get_launch_attempts,
+            list_launch_attempts,
+            get_launch_attempt,
+            get_launch_attempt_log,
             prepare_game,
             install_runtime,
             launch_game,

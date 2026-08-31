@@ -14,7 +14,10 @@ pub fn ponte_dir() -> Result<PathBuf, CommandError> {
 pub fn ensure_ponte_dir() -> Result<PathBuf, CommandError> {
     let dir = ponte_dir()?;
     fs::create_dir_all(&dir).map_err(|err| {
-        CommandError::new("unknown", format!("Não foi possível criar a pasta Ponte: {err}"))
+        CommandError::new(
+            "unknown",
+            format!("Não foi possível criar a pasta Ponte: {err}"),
+        )
     })?;
     fs::create_dir_all(dir.join("prefixes")).ok();
     Ok(dir)
@@ -30,12 +33,10 @@ pub fn settings_path() -> Result<PathBuf, CommandError> {
 
 fn write_atomic(path: &Path, contents: &str) -> Result<(), CommandError> {
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, contents).map_err(|err| {
-        CommandError::new("unknown", format!("Falha ao gravar: {err}"))
-    })?;
-    fs::rename(&tmp, path).map_err(|err| {
-        CommandError::new("unknown", format!("Falha ao gravar: {err}"))
-    })?;
+    fs::write(&tmp, contents)
+        .map_err(|err| CommandError::new("unknown", format!("Falha ao gravar: {err}")))?;
+    fs::rename(&tmp, path)
+        .map_err(|err| CommandError::new("unknown", format!("Falha ao gravar: {err}")))?;
     Ok(())
 }
 
@@ -47,9 +48,8 @@ pub fn read_library() -> Result<LibraryFile, CommandError> {
             games: vec![],
         });
     }
-    let raw = fs::read_to_string(&path).map_err(|err| {
-        CommandError::new("unknown", format!("Falha ao ler a biblioteca: {err}"))
-    })?;
+    let raw = fs::read_to_string(&path)
+        .map_err(|err| CommandError::new("unknown", format!("Falha ao ler a biblioteca: {err}")))?;
     match serde_json::from_str::<LibraryFile>(&raw) {
         Ok(file) if file.version == 1 => Ok(file),
         _ => Ok(LibraryFile {
@@ -71,9 +71,8 @@ pub fn read_settings() -> Result<Settings, CommandError> {
     if !path.exists() {
         return Ok(Settings::default());
     }
-    let raw = fs::read_to_string(&path).map_err(|err| {
-        CommandError::new("unknown", format!("Falha ao ler ajustes: {err}"))
-    })?;
+    let raw = fs::read_to_string(&path)
+        .map_err(|err| CommandError::new("unknown", format!("Falha ao ler ajustes: {err}")))?;
     Ok(serde_json::from_str(&raw).unwrap_or_default())
 }
 

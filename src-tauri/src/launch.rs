@@ -6,13 +6,18 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use uuid::Uuid;
+
+use crate::attempts;
 use crate::discover::is_helper_exe;
 use crate::env_backend::env_for_backend;
 use crate::error::CommandError;
 use crate::paths::{is_windows_exe_path, prefix_is_owned};
 use crate::runtimes::resolve_wine;
 use crate::storage::{ensure_ponte_dir, expand_home, read_settings};
-use crate::types::{DxBackend, Game, GameLog, LaunchState};
+use crate::types::{
+    DxBackend, Game, GameLog, LaunchAttempt, LaunchAttemptStatus, LaunchFailure, LaunchState,
+};
 
 const LOG_CAP: usize = 500;
 const WINEBOOT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -27,11 +32,7 @@ const VCRUN_DLLS: &[&str] = &[
     "concrt140",
     "vccorlib140",
 ];
-const VCRUN_NATIVE_FILES: &[&str] = &[
-    "vcruntime140.dll",
-    "vcruntime140_1.dll",
-    "msvcp140.dll",
-];
+const VCRUN_NATIVE_FILES: &[&str] = &["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"];
 const VCRUN_CACHE_FILES: &[&str] = &[
     "vcruntime140.dll",
     "vcruntime140_1.dll",
@@ -48,6 +49,7 @@ pub struct LaunchRegistry {
     pub processes: Mutex<HashMap<String, Child>>,
     pub logs: Mutex<HashMap<String, Vec<String>>>,
     pub states: Mutex<HashMap<String, LaunchState>>,
+    pub active_attempts: Mutex<HashMap<String, String>>,
 }
 
 impl LaunchRegistry {
@@ -56,6 +58,7 @@ impl LaunchRegistry {
             processes: Mutex::new(HashMap::new()),
             logs: Mutex::new(HashMap::new()),
             states: Mutex::new(HashMap::new()),
+            active_attempts: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -72,13 +75,74 @@ fn now_stamp() -> String {
 }
 
 pub fn append_log(registry: &LaunchRegistry, game_id: &str, message: &str) {
-    let mut logs = registry.logs.lock().expect("logs mutex");
-    let lines = logs.entry(game_id.to_string()).or_default();
-    lines.push(format!("[{}] {message}", now_stamp()));
-    if lines.len() > LOG_CAP {
-        let extra = lines.len() - LOG_CAP;
-        lines.drain(0..extra);
+    let line = format!("[{}] {message}", now_stamp());
+    {
+        let mut logs = registry.logs.lock().expect("logs mutex");
+        let lines = logs.entry(game_id.to_string()).or_default();
+        lines.push(line.clone());
+        if lines.len() > LOG_CAP {
+            let extra = lines.len() - LOG_CAP;
+            lines.drain(0..extra);
+        }
     }
+    let attempt_id = registry
+        .active_attempts
+        .lock()
+        .expect("attempt mutex")
+        .get(game_id)
+        .cloned();
+    if let Some(attempt_id) = attempt_id {
+        if let Ok(attempt) = attempts::read(game_id, &attempt_id) {
+            let _ = attempts::append_log(&attempt, &line);
+        }
+    }
+}
+
+fn active_attempt(registry: &LaunchRegistry, game_id: &str) -> Option<String> {
+    registry
+        .active_attempts
+        .lock()
+        .expect("attempt mutex")
+        .get(game_id)
+        .cloned()
+}
+
+fn finish_attempt(
+    registry: &LaunchRegistry,
+    game_id: &str,
+    status: LaunchAttemptStatus,
+    exit_code: Option<i32>,
+    failure: Option<LaunchFailure>,
+) {
+    let Some(attempt_id) = active_attempt(registry, game_id) else {
+        return;
+    };
+    if let Ok(mut attempt) = attempts::read(game_id, &attempt_id) {
+        attempt.status = status;
+        attempt.updated_at = now_epoch();
+        attempt.finished_at = Some(now_epoch());
+        attempt.exit_code = exit_code;
+        attempt.duration_ms = attempt.started_at.parse::<u64>().ok().and_then(|started| {
+            now_epoch()
+                .parse::<u64>()
+                .ok()
+                .map(|now| now.saturating_sub(started) * 1000)
+        });
+        attempt.failure = failure;
+        let _ = attempts::save(&attempt);
+    }
+    registry
+        .active_attempts
+        .lock()
+        .expect("attempt mutex")
+        .remove(game_id);
+}
+
+fn now_epoch() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string())
 }
 
 pub fn set_state(registry: &LaunchRegistry, game_id: &str, state: LaunchState) {
@@ -109,6 +173,13 @@ fn reap(registry: &LaunchRegistry, game_id: &str) {
                 if status.success() {
                     set_state(registry, game_id, LaunchState::Idle);
                     append_log(registry, game_id, "Processo terminou.");
+                    finish_attempt(
+                        registry,
+                        game_id,
+                        LaunchAttemptStatus::Succeeded,
+                        status.code(),
+                        None,
+                    );
                 } else {
                     set_state(registry, game_id, LaunchState::Error);
                     append_log(
@@ -117,13 +188,39 @@ fn reap(registry: &LaunchRegistry, game_id: &str) {
                         &format!("Processo saiu com código {status}."),
                     );
                     hint_graphics_failure(registry, game_id);
+                    finish_attempt(
+                        registry,
+                        game_id,
+                        LaunchAttemptStatus::Failed,
+                        status.code(),
+                        Some(LaunchFailure {
+                            code: "process_exit".to_string(),
+                            message: format!("Processo saiu com código {status}."),
+                            retryable: true,
+                        }),
+                    );
                 }
             }
             Ok(None) => {}
             Err(err) => {
                 processes.remove(game_id);
                 set_state(registry, game_id, LaunchState::Error);
-                append_log(registry, game_id, &format!("Falha ao consultar processo: {err}"));
+                append_log(
+                    registry,
+                    game_id,
+                    &format!("Falha ao consultar processo: {err}"),
+                );
+                finish_attempt(
+                    registry,
+                    game_id,
+                    LaunchAttemptStatus::Failed,
+                    None,
+                    Some(LaunchFailure {
+                        code: "process_wait".to_string(),
+                        message: err.to_string(),
+                        retryable: true,
+                    }),
+                );
             }
         }
     }
@@ -146,7 +243,9 @@ fn hint_graphics_failure(registry: &LaunchRegistry, game_id: &str) {
         match logs.get(game_id) {
             Some(lines) => {
                 lines.iter().any(|line| line.contains(NEEDLE))
-                    && !lines.iter().any(|line| line.contains("não consegue o DirectX 11"))
+                    && !lines
+                        .iter()
+                        .any(|line| line.contains("não consegue o DirectX 11"))
             }
             None => false,
         }
@@ -229,9 +328,7 @@ fn run_wineboot(
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|err| {
-            CommandError::new("prefix_failed", format!("wineboot falhou: {err}"))
-        })?;
+        .map_err(|err| CommandError::new("prefix_failed", format!("wineboot falhou: {err}")))?;
 
     let stderr_pipe = child.stderr.take();
     let stderr_thread = std::thread::spawn(move || {
@@ -360,7 +457,10 @@ fn vcrun_marked(prefix: &Path) -> bool {
 }
 
 fn mark_vcrun(prefix: &Path) {
-    let _ = fs::write(system32_dir(prefix).join(VCRUN_MARKER), b"microsoft-vcrun-2015-2022\n");
+    let _ = fs::write(
+        system32_dir(prefix).join(VCRUN_MARKER),
+        b"microsoft-vcrun-2015-2022\n",
+    );
 }
 
 fn clear_vcrun_stub_registry(wine64: &str, prefix: &Path) {
@@ -631,10 +731,16 @@ pub fn install_vcrun(registry: &LaunchRegistry, game: &Game) -> Result<(), Comma
 pub fn launch_game(
     registry: Arc<LaunchRegistry>,
     game: &Game,
-) -> Result<(), CommandError> {
+) -> Result<LaunchAttempt, CommandError> {
     let state = current_state(registry.as_ref(), &game.id);
     if matches!(state, LaunchState::Running | LaunchState::Starting) {
-        return Ok(());
+        if let Some(attempt_id) = active_attempt(registry.as_ref(), &game.id) {
+            return attempts::read(&game.id, &attempt_id);
+        }
+        return Err(CommandError::new(
+            "launch_busy",
+            "Este jogo já tem uma tentativa de lançamento em andamento.",
+        ));
     }
     if game.exe_path.trim().is_empty() || !is_windows_exe_path(&game.exe_path) {
         return Err(CommandError::new(
@@ -668,6 +774,61 @@ pub fn launch_game(
     let settings = read_settings()?;
     let prefix = expand_home(&game.prefix_path);
     std::fs::create_dir_all(&prefix).ok();
+    let preflight = crate::preflight::inspect(game);
+    if preflight.status == crate::types::PreflightStatus::Blocked {
+        let reason = preflight
+            .checks
+            .iter()
+            .find(|check| check.status == crate::types::CheckStatus::Fail)
+            .map(|check| check.detail.clone())
+            .unwrap_or_else(|| "O preflight bloqueou este lançamento.".to_string());
+        return Err(CommandError::new("launch_blocked", reason));
+    }
+
+    let exe_args = game
+        .args
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let started_at = now_epoch();
+    let attempt = LaunchAttempt {
+        id: Uuid::new_v4().to_string(),
+        game_id: game.id.clone(),
+        status: LaunchAttemptStatus::Starting,
+        started_at: started_at.clone(),
+        updated_at: started_at,
+        finished_at: None,
+        executable: exe.to_string_lossy().into_owned(),
+        working_dir: exe
+            .parent()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        args: exe_args.clone(),
+        runtime_kind: game.runtime_kind,
+        runtime_path: runtime.wine64_path.clone(),
+        dx_backend: game.dx_backend,
+        prefix_path: prefix.to_string_lossy().into_owned(),
+        pid: None,
+        exit_code: None,
+        duration_ms: None,
+        profile_id: Some(
+            match preflight.engine_guess {
+                crate::types::EngineGuess::Unity => "unity-d3d11",
+                crate::types::EngineGuess::Unreal => "unreal-d3d11",
+                crate::types::EngineGuess::Unknown => "portable-win64",
+            }
+            .to_string(),
+        ),
+        preflight_fingerprint: Some(preflight.fingerprint),
+        log_path: None,
+        failure: None,
+    };
+    attempts::save(&attempt)?;
+    registry
+        .active_attempts
+        .lock()
+        .expect("attempt mutex")
+        .insert(game.id.clone(), attempt.id.clone());
 
     set_state(registry.as_ref(), &game.id, LaunchState::Starting);
     append_log(
@@ -690,15 +851,32 @@ pub fn launch_game(
         cmd.current_dir(work_dir);
     }
     cmd.arg(&exe);
-    for arg in game.args.split_whitespace() {
+    for arg in &exe_args {
         cmd.arg(arg);
     }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|err| {
-        set_state(registry.as_ref(), &game.id, LaunchState::Error);
-        CommandError::new("launch_failed", format!("Falha ao iniciar: {err}"))
-    })?;
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            set_state(registry.as_ref(), &game.id, LaunchState::Error);
+            let failure = LaunchFailure {
+                code: "spawn_failed".to_string(),
+                message: format!("Falha ao iniciar: {err}"),
+                retryable: true,
+            };
+            append_log(registry.as_ref(), &game.id, &failure.message);
+            finish_attempt(
+                registry.as_ref(),
+                &game.id,
+                LaunchAttemptStatus::Failed,
+                None,
+                Some(failure.clone()),
+            );
+            return Err(CommandError::new("launch_failed", failure.message));
+        }
+    };
+    let pid = child.id();
     pipe_output(Arc::clone(&registry), game.id.clone(), &mut child);
     registry
         .processes
@@ -711,7 +889,12 @@ pub fn launch_game(
         &game.id,
         &format!("Iniciando {}", exe.display()),
     );
-    Ok(())
+    let mut persisted = attempt;
+    persisted.pid = Some(pid);
+    persisted.status = LaunchAttemptStatus::Running;
+    persisted.updated_at = now_epoch();
+    attempts::save(&persisted)?;
+    Ok(persisted)
 }
 
 pub fn stop_game(registry: &LaunchRegistry, game_id: &str) -> Result<(), CommandError> {
@@ -730,6 +913,17 @@ pub fn stop_game(registry: &LaunchRegistry, game_id: &str) -> Result<(), Command
         let _ = child.wait();
     }
     append_log(registry, game_id, "Processo encerrado.");
+    finish_attempt(
+        registry,
+        game_id,
+        LaunchAttemptStatus::Interrupted,
+        None,
+        Some(LaunchFailure {
+            code: "stopped_by_user".to_string(),
+            message: "O processo foi encerrado pelo utilizador.".to_string(),
+            retryable: true,
+        }),
+    );
     set_state(registry, game_id, LaunchState::Idle);
     Ok(())
 }
@@ -742,6 +936,18 @@ pub fn logs_for(registry: &LaunchRegistry, game_id: &str) -> GameLog {
         .get(game_id)
         .cloned()
         .unwrap_or_default();
+    if !lines.is_empty() {
+        return GameLog {
+            game_id: game_id.to_string(),
+            lines,
+            updated_at: now_stamp(),
+        };
+    }
+    if let Ok(Some(attempt)) = attempts::latest(game_id) {
+        if let Ok(log) = attempts::log(game_id, &attempt.id) {
+            return log;
+        }
+    }
     GameLog {
         game_id: game_id.to_string(),
         lines,
@@ -769,10 +975,7 @@ mod tests {
 
     #[test]
     fn wine_builtin_dlls_do_not_count_as_vcrun() {
-        let dir = std::env::temp_dir().join(format!(
-            "ponte-vcrun-builtin-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("ponte-vcrun-builtin-{}", std::process::id()));
         let system32 = dir.join("drive_c/windows/system32");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&system32).unwrap();
@@ -789,21 +992,18 @@ mod tests {
 
     #[test]
     fn copies_native_vcrun_dlls_between_prefixes() {
-        let from = std::env::temp_dir().join(format!(
-            "ponte-vcrun-from-{}",
-            std::process::id()
-        ));
-        let to = std::env::temp_dir().join(format!(
-            "ponte-vcrun-to-{}",
-            std::process::id()
-        ));
+        let from = std::env::temp_dir().join(format!("ponte-vcrun-from-{}", std::process::id()));
+        let to = std::env::temp_dir().join(format!("ponte-vcrun-to-{}", std::process::id()));
         let _ = fs::remove_dir_all(&from);
         let _ = fs::remove_dir_all(&to);
         fs::create_dir_all(&from).unwrap();
         for name in ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"] {
             fs::write(from.join(name), b"Microsoft Visual C++").unwrap();
         }
-        assert!(super::copy_vcrun_dlls(&from, &to.join("drive_c/windows/system32")));
+        assert!(super::copy_vcrun_dlls(
+            &from,
+            &to.join("drive_c/windows/system32")
+        ));
         assert!(vcrun_is_installed(&to));
         let _ = fs::remove_dir_all(&from);
         let _ = fs::remove_dir_all(&to);

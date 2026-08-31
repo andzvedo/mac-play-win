@@ -59,8 +59,8 @@ describe("WebPonteBackend", () => {
     expect(game.name).toBe("Hades");
     expect(game.exePath).toBe("/Games/Hades/Hades.exe");
     expect(game.installDir).toBe("/Games/Hades");
-    expect(game.runtimeKind).toBe("gptk");
-    expect(game.dxBackend).toBe("d3dmetal");
+    expect(game.runtimeKind).toBe("gcenx_staging");
+    expect(game.dxBackend).toBe("dxvk");
     expect(game.prefixStatus).toBe("missing");
     expect(game.prefixPath).toContain("game-test-id");
 

@@ -65,7 +65,10 @@ mod tests {
     #[test]
     fn d3dmetal_sets_overrides() {
         let env = env_for_backend(&DxBackend::D3dmetal, true);
-        let hud = env.iter().find(|(key, _)| key == "MTL_HUD_ENABLED").unwrap();
+        let hud = env
+            .iter()
+            .find(|(key, _)| key == "MTL_HUD_ENABLED")
+            .unwrap();
         assert_eq!(hud.1, "1");
         let overrides = env
             .iter()
@@ -87,4 +90,3 @@ mod tests {
         );
     }
 }
-

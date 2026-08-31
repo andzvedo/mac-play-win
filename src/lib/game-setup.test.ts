@@ -30,7 +30,7 @@ describe("game-setup labels", () => {
     }
   });
 
-  it("só instala automaticamente Wine Staging e WineHQ", () => {
+  it("só instala automaticamente Wine Staging gerenciado", () => {
     const kinds: RuntimeKind[] = [
       "gptk",
       "gcenx_staging",
@@ -41,31 +41,24 @@ describe("game-setup labels", () => {
     ];
     expect(kinds.filter(runtimeCanAutoInstall)).toEqual([
       "gcenx_staging",
-      "winehq",
     ]);
   });
 
-  it("escolhe GPTK + D3DMetal quando o GPTK está presente", () => {
+  it("prefere Wine Staging + DXVK quando o Staging está presente", () => {
     const stack = recommendedStack([
       { ...emptyRuntime("gptk"), found: true, wine64Path: "/opt/gptk/bin/wine64" },
+      { ...emptyRuntime("gcenx_staging"), found: true, wine64Path: "/opt/staging/bin/wine" },
       { ...emptyRuntime("winehq"), found: true, wine64Path: "/opt/wine/bin/wine" },
     ]);
-    expect(stack).toEqual({ runtimeKind: "gptk", dxBackend: "d3dmetal" });
+    expect(stack).toEqual({ runtimeKind: "gcenx_staging", dxBackend: "dxvk" });
   });
 
-  it("cai no Wine Staging + DXMT se não houver GPTK", () => {
+  it("usa GPTK + D3DMetal quando não há Wine Staging", () => {
     const stack = recommendedStack([
-      emptyRuntime("gptk"),
-      {
-        ...emptyRuntime("gcenx_staging"),
-        found: true,
-        wine64Path: "/opt/homebrew/bin/wine64",
-      },
+      { ...emptyRuntime("gptk"), found: true, wine64Path: "/opt/gptk/bin/wine64" },
+      emptyRuntime("gcenx_staging"),
     ]);
-    expect(stack).toEqual({
-      runtimeKind: "gcenx_staging",
-      dxBackend: "dxmt",
-    });
+    expect(stack).toEqual({ runtimeKind: "gptk", dxBackend: "d3dmetal" });
   });
 
   it("instala automaticamente enquanto houver itens em falta", () => {

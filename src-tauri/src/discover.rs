@@ -205,7 +205,7 @@ fn suggested_name(folder: &Path, exe: &Path) -> String {
         "win64" | "win32" | "binaries" | "bin" | "game" | "games"
     );
     if generic_folder {
-        if let Some(stem) = exe.file_stem().and_then(|name| name_from_stem(name)) {
+        if let Some(stem) = exe.file_stem().and_then(name_from_stem) {
             return stem;
         }
     }
@@ -252,11 +252,7 @@ fn dir_has_named_exe(dir: &Path) -> bool {
 }
 
 fn dir_looks_like_game(dir: &Path) -> bool {
-    if skip_dir_name(
-        dir.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(""),
-    ) {
+    if skip_dir_name(dir.file_name().and_then(|name| name.to_str()).unwrap_or("")) {
         return false;
     }
     dir_has_unity_data(dir) || dir_has_named_exe(dir) || shipping_under(dir)
@@ -318,13 +314,7 @@ fn looks_like_library_root(root: &Path) -> bool {
     !root_is_game
 }
 
-fn score_exe(
-    path: &Path,
-    root: &Path,
-    root_name: &str,
-    size: u64,
-    siblings: &[String],
-) -> i32 {
+fn score_exe(path: &Path, root: &Path, root_name: &str, size: u64, siblings: &[String]) -> i32 {
     let name = path
         .file_name()
         .and_then(|value| value.to_str())
@@ -494,10 +484,8 @@ mod tests {
     use std::path::PathBuf;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "ponte-discover-{name}-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("ponte-discover-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

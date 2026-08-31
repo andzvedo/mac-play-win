@@ -1,0 +1,182 @@
+name: D3D11 probe
+
+on:
+  push:
+    paths:
+      - ".github/workflows/d3d11-probe.yml"
+      - "tools/d3d11-probe/d3d11-probe.cpp"
+      - "tools/d3d11-probe/README.md"
+  pull_request:
+    paths:
+      - ".github/workflows/d3d11-probe.yml"
+      - "tools/d3d11-probe/d3d11-probe.cpp"
+      - "tools/d3d11-probe/README.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-validate:
+    name: Build and validate Windows x64 probe
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC x64 environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Compile probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "build" | Out-Null
+
+          cl.exe /nologo /std:c++17 /W4 /WX /EHsc /MT /O2 /Brepro `
+            /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DUNICODE /D_UNICODE `
+            /Fe:build\d3d11-probe.exe /Fo:build\d3d11-probe.obj `
+            tools\d3d11-probe\d3d11-probe.cpp `
+            /link /SUBSYSTEM:CONSOLE /MACHINE:X64 /Brepro /INCREMENTAL:NO /OPT:REF /OPT:ICF `
+            d3d11.lib dxgi.lib user32.lib
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "cl.exe failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Validate PE metadata and static CRT
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $probe = "build\d3d11-probe.exe"
+
+          if (-not (Test-Path -LiteralPath $probe -PathType Leaf)) {
+            throw "Probe executable was not produced: $probe"
+          }
+
+          $headers = (& dumpbin.exe /headers $probe | Out-String)
+          if ($LASTEXITCODE -ne 0) {
+            throw "dumpbin /headers failed with exit code $LASTEXITCODE"
+          }
+          if ($headers -notmatch "machine \(x64\)") {
+            throw "The probe is not a PE x64 executable"
+          }
+          if ($headers -notmatch "subsystem \(Windows CUI\)") {
+            throw "The probe does not use the console subsystem"
+          }
+          if ($headers -notmatch "magic # \(PE32\+\)") {
+            throw "The probe does not use the PE32+ x64 format"
+          }
+
+          $dependencies = (& dumpbin.exe /dependents $probe | Out-String).ToLowerInvariant()
+          if ($LASTEXITCODE -ne 0) {
+            throw "dumpbin /dependents failed with exit code $LASTEXITCODE"
+          }
+          foreach ($dynamicCrt in @("vcruntime", "msvcp", "ucrtbase", "api-ms-win-crt")) {
+            if ($dependencies.Contains($dynamicCrt)) {
+              throw "The probe unexpectedly imports the dynamic CRT: $dynamicCrt"
+            }
+          }
+
+          Write-Host "PE metadata and /MT dependency checks passed."
+          Write-Host $dependencies
+
+      - name: Run deterministic WARP validation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $probe = (Resolve-Path "build\d3d11-probe.exe").Path
+          $lines = & $probe --warp 2>&1
+          $exitCode = $LASTEXITCODE
+          $output = ($lines -join "`n").Trim()
+
+          if ($exitCode -ne 0) {
+            throw "WARP probe failed with exit code ${exitCode}: ${output}"
+          }
+          if ([string]::IsNullOrWhiteSpace($output) -or $output.Contains("`n")) {
+            throw "WARP probe did not emit exactly one JSON line: ${output}"
+          }
+
+          try {
+            $result = $output | ConvertFrom-Json
+          } catch {
+            throw "WARP probe emitted invalid JSON: ${output}"
+          }
+
+          foreach ($property in @("ok", "featureLevel", "adapter", "vendorId", "deviceId", "hresult", "stage")) {
+            if ($null -eq $result.PSObject.Properties[$property]) {
+              throw "WARP JSON is missing the '$property' property: ${output}"
+            }
+          }
+          if ($result.ok -ne $true -or $result.featureLevel -notmatch "^11_[01]$" -or
+              [string]::IsNullOrWhiteSpace([string]$result.adapter) -or
+              $null -eq $result.vendorId -or $null -eq $result.deviceId) {
+            throw "WARP probe did not report a successful D3D11 adapter result: ${output}"
+          }
+          if ($null -ne $result.hresult -or $null -ne $result.stage) {
+            throw "Successful WARP probe must report null hresult and stage: ${output}"
+          }
+
+          Write-Host "WARP probe passed: ${output}"
+
+      - name: Run hardware validation when the runner exposes a hardware adapter
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $probe = (Resolve-Path "build\d3d11-probe.exe").Path
+          $lines = & $probe 2>&1
+          $exitCode = $LASTEXITCODE
+          $output = ($lines -join "`n").Trim()
+
+          if ([string]::IsNullOrWhiteSpace($output) -or $output.Contains("`n")) {
+            throw "Hardware probe did not emit exactly one JSON line: ${output}"
+          }
+          try {
+            $result = $output | ConvertFrom-Json
+          } catch {
+            throw "Hardware probe emitted invalid JSON: ${output}"
+          }
+
+          foreach ($property in @("ok", "featureLevel", "adapter", "vendorId", "deviceId", "hresult", "stage")) {
+            if ($null -eq $result.PSObject.Properties[$property]) {
+              throw "Hardware JSON is missing the '$property' property: ${output}"
+            }
+          }
+
+          if ($result.ok -eq $false -and
+              ([string]::IsNullOrWhiteSpace([string]$result.hresult) -or
+               [string]::IsNullOrWhiteSpace([string]$result.stage))) {
+            throw "Failed hardware probe must report hresult and stage: ${output}"
+          }
+
+          if ($exitCode -eq 0 -and $result.ok -eq $true) {
+            Write-Host "Hardware probe passed: ${output}"
+          } else {
+            Write-Warning "Hardware adapter is unavailable or rejected the probe on this hosted runner; WARP remains the required deterministic validation. exit=${exitCode} result=${output}"
+          }
+
+      - name: Generate SHA-256 manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $probe = "build\d3d11-probe.exe"
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $probe).Hash.ToLowerInvariant()
+          "$hash  d3d11-probe.exe" | Out-File -FilePath "build\d3d11-probe.exe.sha256" -Encoding ascii
+          $expected = ((Get-Content -LiteralPath "build\d3d11-probe.exe.sha256") -split "\s+")[0].ToLowerInvariant()
+          if ($hash -ne $expected) {
+            throw "Generated SHA-256 manifest does not match the executable"
+          }
+          Write-Host "SHA256 verified: ${hash}  d3d11-probe.exe"
+
+      - name: Upload validated probe and SHA-256 manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: d3d11-probe-windows-x64
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            build/d3d11-probe.exe
+            build/d3d11-probe.exe.sha256
