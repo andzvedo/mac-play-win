@@ -20,6 +20,6 @@
 - macOS native file dialogs must be async Tauri commands with `set_parent`, or the UI freezes.
 - Tauri icon PNGs must be RGBA or `tauri:dev` fails to build.
 - App data lives in `~/Library/Application Support/Ponte/` (`library.json`, prefixes, and `cache/vcrun2015-x64`).
-- Plan T1–T37 is implemented; Hydra, stores, torrents, auto-GPTK/CrossOver install, and kernel anti-cheat stay out of scope. The app can auto-install Wine Staging (Homebrew), a Wine prefix, DXVK-macOS, and VC++ 2015–2022.
+- Plan T1–T37 is implemented; Hydra, stores, torrents, auto-GPTK/CrossOver install, and kernel anti-cheat stay out of scope. The app can auto-install and validate managed Wine Staging, a Wine prefix, DXVK-macOS, and VC++ 2015–2022.
 - Games are added by folder; opening a game that is not ready detects missing pieces and prepares them automatically.
 - Game prefixes may need the official Visual C++ 2015–2022 x64 redistributable; it is cached once and copied into prefixes, and detection must not treat a prefix as complete without the real install.

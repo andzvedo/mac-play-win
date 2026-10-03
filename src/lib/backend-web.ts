@@ -455,7 +455,11 @@ export class WebPonteBackend implements PonteBackend {
     await delay(200);
     this.setLaunch(gameId, "idle");
     if (activeAttempt) {
-      this.finishLaunchAttempt(gameId, activeAttempt.id, "succeeded");
+      this.finishLaunchAttempt(gameId, activeAttempt.id, "interrupted", {
+        code: "stopped_by_user",
+        message: "O processo foi encerrado pelo utilizador.",
+        retryable: true,
+      });
     }
   }
 
@@ -550,13 +554,13 @@ export class WebPonteBackend implements PonteBackend {
       {
         id: "runtime",
         label: "Runtime selecionado",
-        status: runtime ? "pass" : "fail",
+        status: runtime ? "pass" : "warning",
         detail: runtime
           ? `${runtime.label} está disponível.`
-          : "Nenhum runtime Wine está disponível.",
+          : "O runtime configurado ainda não está disponível; a preparação pode instalá-lo.",
         remediation: runtime
           ? undefined
-          : "Instale o runtime recomendado ou escolha um wine64 disponível.",
+          : "Execute Preparar jogo para instalar o Wine Staging gerenciado.",
       },
       {
         id: "backend",

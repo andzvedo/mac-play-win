@@ -109,7 +109,11 @@ export function SettingsPage() {
               <div>
                 <p className="text-sm font-medium">{runtime.label}</p>
                 <p className="break-all text-xs text-muted-foreground">
-                  {runtime.found ? runtime.wine64Path : "Não encontrado"}
+                  {runtime.found
+                    ? runtime.wine64Path
+                    : runtime.kind === "gptk"
+                      ? "Wine x64 + payload D3DMetal não validados"
+                      : "Não encontrado"}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -135,8 +139,21 @@ export function SettingsPage() {
                     {installing === runtime.kind ? "A instalar…" : "Instalar"}
                   </Button>
                 ) : null}
+                {!runtime.found &&
+                !runtimeCanAutoInstall(runtime.kind) &&
+                runtime.installUrl ? (
+                  <Button asChild type="button" variant="outline" size="sm">
+                    <a href={runtime.installUrl} target="_blank" rel="noreferrer">
+                      Obter
+                    </a>
+                  </Button>
+                ) : null}
                 <Badge variant={runtime.found ? "default" : "secondary"}>
-                  {runtime.found ? "Encontrado" : "Ausente"}
+                  {runtime.found
+                    ? runtime.kind === "gptk"
+                      ? "Validado"
+                      : "Encontrado"
+                    : "Ausente"}
                 </Badge>
               </div>
             </li>

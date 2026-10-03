@@ -80,6 +80,43 @@ pub(crate) fn prefix_has_dxvk(prefix: &Path) -> bool {
         .is_file()
 }
 
+fn last_graphics_arg(args: &str) -> Option<String> {
+    args.split_whitespace()
+        .map(str::to_ascii_lowercase)
+        .filter(|arg| {
+            matches!(
+                arg.as_str(),
+                "-dx11" | "-dx12" | "-d3d11" | "-d3d12" | "-vulkan" | "-opengl"
+            )
+        })
+        .last()
+}
+
+pub(crate) fn args_force_dx11(args: &str) -> bool {
+    matches!(last_graphics_arg(args).as_deref(), Some("-dx11" | "-d3d11"))
+}
+
+fn args_force_dx12(args: &str) -> bool {
+    matches!(last_graphics_arg(args).as_deref(), Some("-dx12" | "-d3d12"))
+}
+
+pub(crate) fn executable_imports(executable: &Path, library: &[u8]) -> bool {
+    fs::read(executable)
+        .map(|bytes| {
+            bytes
+                .windows(library.len())
+                .any(|window| window.eq_ignore_ascii_case(library))
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn game_requires_d3d12(game: &Game) -> bool {
+    if args_force_dx11(&game.args) {
+        return false;
+    }
+    args_force_dx12(&game.args) || executable_imports(&expand_home(&game.exe_path), b"d3d12.dll")
+}
+
 fn item(id: &str, label: &str, status: SetupItemStatus, detail: impl Into<String>) -> SetupItem {
     SetupItem {
         id: id.to_string(),
@@ -90,10 +127,27 @@ fn item(id: &str, label: &str, status: SetupItemStatus, detail: impl Into<String
 }
 
 pub fn recommended_stack_for_engine(engine: &EngineGuess) -> (RuntimeKind, DxBackend) {
-    pick_stack(&detect_runtimes(), engine)
+    let _ = engine;
+    pick_stack(&detect_runtimes(), false)
 }
 
-fn pick_stack(runtimes: &[Runtime], _engine: &EngineGuess) -> (RuntimeKind, DxBackend) {
+pub(crate) fn recommended_stack_for_game(game: &Game) -> (RuntimeKind, DxBackend) {
+    pick_stack(&detect_runtimes(), game_requires_d3d12(game))
+}
+
+fn pick_stack(runtimes: &[Runtime], requires_d3d12: bool) -> (RuntimeKind, DxBackend) {
+    if requires_d3d12 {
+        for kind in [RuntimeKind::Gptk, RuntimeKind::Crossover] {
+            if let Some(runtime) = runtimes.iter().find(|item| item.kind == kind && item.found) {
+                if backend_available(Path::new(&runtime.wine64_path), &DxBackend::D3dmetal) {
+                    return (kind, DxBackend::D3dmetal);
+                }
+            }
+        }
+        // O GPTK é manual. Recomendá-lo explicitamente impede que a
+        // preparação esconda a necessidade de D3D12 atrás de um fallback DXVK.
+        return (RuntimeKind::Gptk, DxBackend::D3dmetal);
+    }
     if runtimes
         .iter()
         .any(|item| item.kind == RuntimeKind::GcenxStaging && item.found)
@@ -136,7 +190,8 @@ pub fn plan_for_game(game: &Game) -> GameSetupPlan {
     let engine = guess_engine(&exe);
     let runtimes = detect_runtimes();
     let found = runtimes.iter().any(|item| item.found);
-    let (recommended_runtime, recommended_backend) = pick_stack(&runtimes, &engine);
+    let requires_d3d12 = game_requires_d3d12(game);
+    let (recommended_runtime, recommended_backend) = pick_stack(&runtimes, requires_d3d12);
     let recommended = runtimes
         .iter()
         .find(|item| item.kind == recommended_runtime && item.found);
@@ -151,13 +206,12 @@ pub fn plan_for_game(game: &Game) -> GameSetupPlan {
             SetupItemStatus::Ready,
             format!("{} em {}", runtime.label, runtime.wine64_path),
         )
-    } else if found {
-        let any = runtimes.iter().find(|item| item.found).unwrap();
+    } else if requires_d3d12 {
         item(
             "runtime",
             "Wine",
-            SetupItemStatus::Ready,
-            format!("{} (fallback)", any.label),
+            SetupItemStatus::Manual,
+            "GPTK + D3DMetal não foram validados. Instale o toolkit oficial da Apple ou um CrossOver com D3DMetal.",
         )
     } else {
         item(
@@ -269,23 +323,27 @@ pub fn plan_for_game(game: &Game) -> GameSetupPlan {
     };
 
     let items = vec![wine_item, graphics_item, prefix_item, vcrun_item];
-    let wine_blocked = items
+    let manual_blocked = items
         .iter()
-        .any(|item| item.id == "runtime" && item.status == SetupItemStatus::Manual);
-    let can_auto_fix = !wine_blocked
+        .any(|item| item.status == SetupItemStatus::Manual);
+    let can_auto_fix = !manual_blocked
         && items
             .iter()
             .any(|item| item.status == SetupItemStatus::Installable);
 
-    let summary = match engine {
-        EngineGuess::Unity => {
-            "Motor Unity: precisa de D3D11 (D3DMetal, DXMT ou DXVK), não WineD3D.".to_string()
-        }
-        EngineGuess::Unreal => {
-            "Motor Unreal: o Ponte usa o exe Shipping e -dx11 (DXVK não faz D3D12).".to_string()
-        }
-        EngineGuess::Unknown => {
-            "O Ponte vai garantir Wine, DirectX no prefixo, prefixo e Visual C++.".to_string()
+    let summary = if requires_d3d12 {
+        "O executável pede D3D12: o Ponte exige GPTK/CrossOver com D3DMetal validado. Use -dx11 somente se o jogo oferecer esse modo.".to_string()
+    } else {
+        match engine {
+            EngineGuess::Unity => {
+                "Motor Unity: precisa de D3D11 (D3DMetal, DXMT ou DXVK), não WineD3D.".to_string()
+            }
+            EngineGuess::Unreal => {
+                "Motor Unreal: o Ponte usa o exe Shipping e -dx11 (DXVK não faz D3D12).".to_string()
+            }
+            EngineGuess::Unknown => {
+                "O Ponte vai garantir Wine, DirectX no prefixo, prefixo e Visual C++.".to_string()
+            }
         }
     };
 
@@ -558,10 +616,11 @@ fn install_managed_wine_staging(
                 CommandError::new("setup_failed", format!("Falha ao validar o bundle: {err}"))
             })?;
         if !status.success() {
-            return Err(CommandError::new(
-                "setup_failed",
-                "O macOS manteve a quarentena no Wine Staging gerenciado.",
-            ));
+            launch::append_log(
+                registry,
+                game_id,
+                "O bundle não tinha quarentena removível; a continuar a validação do runtime.",
+            );
         }
     }
     if !detect_runtimes()
@@ -923,6 +982,21 @@ pub fn ensure_prefix_deps(registry: &LaunchRegistry, game_id: &str) -> Result<Ga
 }
 
 pub fn prepare_game(registry: &LaunchRegistry, game_id: &str) -> Result<Game, CommandError> {
+    launch::set_state(registry, game_id, crate::types::LaunchState::Starting);
+    let result = prepare_game_inner(registry, game_id);
+    launch::set_state(
+        registry,
+        game_id,
+        if result.is_ok() {
+            crate::types::LaunchState::Idle
+        } else {
+            crate::types::LaunchState::Error
+        },
+    );
+    result
+}
+
+fn prepare_game_inner(registry: &LaunchRegistry, game_id: &str) -> Result<Game, CommandError> {
     let mut library = read_library()?;
     let game = library
         .games
@@ -931,25 +1005,28 @@ pub fn prepare_game(registry: &LaunchRegistry, game_id: &str) -> Result<Game, Co
         .cloned()
         .ok_or_else(|| CommandError::new("not_found", "Jogo não encontrado."))?;
 
-    launch::set_state(registry, game_id, crate::types::LaunchState::Starting);
     launch::append_log(registry, game_id, "A analisar o que este jogo precisa…");
     let plan = plan_for_game(&game);
     launch::append_log(registry, game_id, &plan.summary);
 
-    if !detect_runtimes()
-        .iter()
-        .any(|item| item.kind == RuntimeKind::GcenxStaging && item.found)
+    if plan.recommended_runtime == RuntimeKind::GcenxStaging
+        && !detect_runtimes()
+            .iter()
+            .any(|item| item.kind == RuntimeKind::GcenxStaging && item.found)
     {
         install_wine_staging(registry, game_id)?;
     }
 
-    let runtimes = detect_runtimes();
-    let (runtime_kind, backend) = pick_stack(&runtimes, &plan.engine_guess);
+    let runtime_kind = plan.recommended_runtime;
+    let backend = plan.recommended_backend;
     if resolve_wine(&runtime_kind).is_none() {
-        launch::set_state(registry, game_id, crate::types::LaunchState::Error);
         return Err(CommandError::new(
             "runtime_missing",
-            "Ainda não há wine64. Instale o Wine Staging ou o GPTK e tente de novo.",
+            if runtime_kind == RuntimeKind::Gptk {
+                "Este jogo pede D3D12. Instale o Game Porting Toolkit com D3DMetal (ou CrossOver compatível), verifique em Ajustes e tente de novo."
+            } else {
+                "Ainda não há wine64 validado. Instale o Wine Staging ou o GPTK e tente de novo."
+            },
         ));
     }
 
@@ -991,7 +1068,6 @@ pub fn prepare_game(registry: &LaunchRegistry, game_id: &str) -> Result<Game, Co
             backend
         ),
     );
-    launch::set_state(registry, game_id, crate::types::LaunchState::Idle);
     let library = read_library()?;
     library
         .games
@@ -1013,7 +1089,7 @@ pub fn install_runtime(kind: &RuntimeKind) -> Result<(), CommandError> {
         )),
         RuntimeKind::Gptk => Err(CommandError::new(
             "setup_failed",
-            "O Game Porting Toolkit não se instala daqui. Use o site da Apple ou o tap Homebrew apple/apple.",
+            "O Game Porting Toolkit não se instala daqui. Obtenha o toolkit atual no site Apple Developer; depois o Ponte valida o Wine x64 e o payload D3DMetal.",
         )),
         RuntimeKind::Crossover => Err(CommandError::new(
             "setup_failed",
@@ -1028,8 +1104,10 @@ pub fn install_runtime(kind: &RuntimeKind) -> Result<(), CommandError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_unreal_shipping, guess_engine, with_dx11_arg};
-    use crate::types::EngineGuess;
+    use super::{
+        args_force_dx11, find_unreal_shipping, game_requires_d3d12, guess_engine, with_dx11_arg,
+    };
+    use crate::types::{DxBackend, EngineGuess, Game, PrefixStatus, RuntimeKind};
     use std::fs;
     use std::path::PathBuf;
 
@@ -1083,5 +1161,37 @@ mod tests {
         assert_eq!(with_dx11_arg(""), "-dx11");
         assert_eq!(with_dx11_arg("-windowed"), "-windowed -dx11");
         assert_eq!(with_dx11_arg("-dx12"), "-dx12");
+    }
+
+    #[test]
+    fn the_last_graphics_flag_controls_the_dx11_override() {
+        assert!(args_force_dx11("-windowed -dx11"));
+        assert!(args_force_dx11("-dx12 -d3d11"));
+        assert!(!args_force_dx11("-dx11 -dx12"));
+        assert!(!args_force_dx11("-vulkan"));
+    }
+
+    #[test]
+    fn dx11_override_turns_a_d3d12_import_into_a_dx11_plan() {
+        let dir = temp_dir("d3d12-import");
+        let exe = dir.join("Game-Win64-Shipping.exe");
+        fs::write(&exe, b"MZ...d3d12.dll...").unwrap();
+        let mut game = Game {
+            id: "game".to_string(),
+            name: "Game".to_string(),
+            exe_path: exe.to_string_lossy().into_owned(),
+            install_dir: dir.to_string_lossy().into_owned(),
+            args: String::new(),
+            runtime_kind: RuntimeKind::GcenxStaging,
+            dx_backend: DxBackend::Dxvk,
+            prefix_path: dir.join("prefix").to_string_lossy().into_owned(),
+            prefix_status: PrefixStatus::Missing,
+            prefix_error: None,
+            created_at: "0".to_string(),
+        };
+
+        assert!(game_requires_d3d12(&game));
+        game.args = "-dx11".to_string();
+        assert!(!game_requires_d3d12(&game));
     }
 }

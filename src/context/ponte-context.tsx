@@ -55,7 +55,7 @@ interface PonteContextValue {
   listLaunchAttempts: (id: string, limit?: number) => Promise<LaunchAttempt[]>;
   prepareGame: (id: string) => Promise<Game>;
   installRuntime: (kind: RuntimeKind) => Promise<void>;
-  launchGame: (id: string) => Promise<void>;
+  launchGame: (id: string) => Promise<LaunchAttempt>;
   stopGame: (id: string) => Promise<void>;
   saveSettings: (settings: Settings) => Promise<void>;
   clearActionError: () => void;
@@ -258,6 +258,7 @@ export function PonteProvider({ children }: { children: ReactNode }) {
           }));
           await refresh();
           await refreshGameMeta(id);
+          return attempt;
         }),
       stopGame: (id) =>
         runAction(async () => {

@@ -67,16 +67,16 @@ A primeira compilação demora. Na janela Ponte: **Ajustes** → confira se o `w
 
 ### 4. Wine (obrigatório para jogar)
 
-Na ficha do jogo, a preparação corre sozinha (e o **Iniciar** também a garante): Wine Staging via Homebrew se não houver `wine64`, prefixo, DXVK-macOS no prefixo (DirectX 11) e Visual C++ 2015–2022. O GPTK e o CrossOver continuam manuais:
+Na ficha do jogo, a preparação corre sozinha (e o **Iniciar** também a garante): Wine Staging gerenciado pelo Ponte se não houver um runtime adequado, prefixo, DXVK-macOS no prefixo (DirectX 11) e Visual C++ 2015–2022. O download do runtime é feito uma vez para a pasta de dados do Ponte, validado por SHA-256 e reutilizado. O GPTK e o CrossOver continuam manuais:
 
 - [Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/) ou [Gcenx/game-porting-toolkit](https://github.com/Gcenx/game-porting-toolkit)
-- [Wine Staging Gcenx](https://github.com/Gcenx/macOS_Wine_builds) (também via `brew install --cask --no-quarantine wine@staging`)
+- [Wine Staging Gcenx](https://github.com/Gcenx/macOS_Wine_builds) (o Homebrew continua sendo uma alternativa manual)
 - [Wine CX](https://github.com/Gcenx/winecx) / CrossOver
 
 ### App para a pasta Aplicativos
 
 ```bash
-npm run tauri:build
+npm run tauri:build:app
 ```
 
 O `.app` sai em `src-tauri/target/release/bundle/macos/`.

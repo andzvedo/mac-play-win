@@ -181,7 +181,7 @@ export function GameDetailPage() {
   const folder = gameInstallDir(game);
   const selectedGame = game;
 
-  async function withBusy(fn: () => Promise<void>) {
+  async function withBusy(fn: () => Promise<unknown>) {
     setBusy(true);
     try {
       await fn();

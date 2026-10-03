@@ -9,11 +9,29 @@ use crate::types::{Game, GameLog, LaunchAttempt, LaunchAttemptStatus, LaunchFail
 const MAX_ATTEMPTS: usize = 20;
 const MAX_LOG_BYTES: usize = 5 * 1024 * 1024;
 
+fn safe_segment(value: &str, label: &str) -> Result<(), CommandError> {
+    if value.is_empty()
+        || value == "."
+        || value == ".."
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(CommandError::new(
+            "not_found",
+            format!("{label} de lançamento inválido."),
+        ));
+    }
+    Ok(())
+}
+
 fn attempts_root() -> Result<PathBuf, CommandError> {
     Ok(ensure_ponte_dir()?.join("attempts"))
 }
 
 fn attempt_dir(game_id: &str, attempt_id: &str) -> Result<PathBuf, CommandError> {
+    safe_segment(game_id, "ID do jogo")?;
+    safe_segment(attempt_id, "ID da tentativa")?;
     let dir = attempts_root()?.join(game_id).join(attempt_id);
     fs::create_dir_all(&dir).map_err(|error| {
         CommandError::new(
@@ -39,6 +57,8 @@ fn json_path(game_id: &str, attempt_id: &str) -> Result<PathBuf, CommandError> {
 }
 
 fn existing_json_path(game_id: &str, attempt_id: &str) -> Result<PathBuf, CommandError> {
+    safe_segment(game_id, "ID do jogo")?;
+    safe_segment(attempt_id, "ID da tentativa")?;
     Ok(attempts_root()?
         .join(game_id)
         .join(attempt_id)
@@ -118,6 +138,7 @@ pub fn read(game_id: &str, attempt_id: &str) -> Result<LaunchAttempt, CommandErr
 }
 
 pub fn list(game_id: &str) -> Result<Vec<LaunchAttempt>, CommandError> {
+    safe_segment(game_id, "ID do jogo")?;
     let root = attempts_root()?.join(game_id);
     let mut attempts = Vec::new();
     let Ok(entries) = fs::read_dir(root) else {
@@ -147,7 +168,12 @@ pub fn append_log(attempt: &LaunchAttempt, line: &str) -> Result<(), CommandErro
     content.push_str(line);
     content.push('\n');
     if content.len() > MAX_LOG_BYTES {
-        let start = content.len() - MAX_LOG_BYTES;
+        let minimum_start = content.len() - MAX_LOG_BYTES;
+        let start = content
+            .char_indices()
+            .find(|(index, _)| *index >= minimum_start)
+            .map(|(index, _)| index)
+            .unwrap_or(0);
         content = content[start..].to_string();
     }
     fs::write(path, content)
@@ -155,6 +181,8 @@ pub fn append_log(attempt: &LaunchAttempt, line: &str) -> Result<(), CommandErro
 }
 
 pub fn log(game_id: &str, attempt_id: &str) -> Result<GameLog, CommandError> {
+    safe_segment(game_id, "ID do jogo")?;
+    safe_segment(attempt_id, "ID da tentativa")?;
     let path = attempts_root()?
         .join(game_id)
         .join(attempt_id)

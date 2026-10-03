@@ -189,26 +189,35 @@ pub fn backend_available(wine_bin: &Path, backend: &DxBackend) -> bool {
     let Some(root) = wine_root_from_bin(wine_bin) else {
         return false;
     };
-    let path_text = root.to_string_lossy().to_ascii_lowercase();
     match backend {
         DxBackend::Wined3d => true,
-        DxBackend::D3dmetal => {
-            path_text.contains("game-porting-toolkit")
-                || path_text.contains("crossover")
-                || root.join("lib/external/libd3dshared.dylib").is_file()
-                || Path::new("/System/Library/Frameworks/D3DMetal.framework").exists()
-        }
+        DxBackend::D3dmetal => d3dmetal_payload_available(&root),
         DxBackend::Dxvk => {
             root.join("lib/wine/dxvk").is_dir()
                 || root.join("lib/dxvk").is_dir()
                 || root.join("share/dxvk").is_dir()
         }
         DxBackend::Dxmt => {
+            let path_text = root.to_string_lossy().to_ascii_lowercase();
             root.join("lib/wine/dxmt").is_dir()
                 || root.join("lib/dxmt").is_dir()
                 || path_text.contains("dxmt")
         }
     }
+}
+
+fn d3dmetal_payload_available(root: &Path) -> bool {
+    [
+        "lib/external/libd3dshared.dylib",
+        "lib64/external/libd3dshared.dylib",
+        "lib/apple_gptk/external/libd3dshared.dylib",
+        "lib64/apple_gptk/external/libd3dshared.dylib",
+        "../lib/external/libd3dshared.dylib",
+        "../Frameworks/D3DMetal.framework/D3DMetal",
+        "../../Frameworks/D3DMetal.framework/D3DMetal",
+    ]
+    .into_iter()
+    .any(|relative| root.join(relative).is_file())
 }
 
 fn append_wine_binaries(paths: &mut Vec<PathBuf>, bin_dir: &Path) {
@@ -351,6 +360,12 @@ fn runtime_candidates(home: &Path, custom_wine_path: &str) -> Vec<RuntimeCandida
             let Some(kind) = kind_for_candidate(&path, hint) else {
                 continue;
             };
+            // Um Wine com nome/caminho de GPTK, mas sem o payload do
+            // D3DMetal, não é um GPTK utilizável para D3D12. Não o publique
+            // como "encontrado" para a interface nem para o preflight.
+            if kind == RuntimeKind::Gptk && !backend_available(&path, &DxBackend::D3dmetal) {
+                continue;
+            }
             candidates.push(RuntimeCandidate { kind, path });
         }
     }
@@ -403,10 +418,11 @@ pub fn resolve_wine(kind: &RuntimeKind) -> Option<Runtime> {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_wine_path, classify_runtime_path, deduplicate_candidates, gcenx_candidates,
-        kind_for_candidate, normalized_component, resolve_detected_wine, RuntimeCandidate,
+        backend_available, canonical_wine_path, classify_runtime_path, deduplicate_candidates,
+        gcenx_candidates, kind_for_candidate, normalized_component, resolve_detected_wine,
+        RuntimeCandidate,
     };
-    use crate::types::{Runtime, RuntimeKind};
+    use crate::types::{DxBackend, Runtime, RuntimeKind};
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -602,6 +618,30 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].kind, RuntimeKind::GcenxStaging);
 
+        fs::remove_dir_all(root).expect("remove test runtime");
+    }
+
+    #[test]
+    fn d3dmetal_requires_a_real_payload_not_a_product_name() {
+        use std::fs::{self, File};
+
+        let root = std::env::temp_dir().join(format!(
+            "ponte-game-porting-toolkit-backend-{}",
+            std::process::id()
+        ));
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).expect("create bin");
+        let wine = bin.join("wine");
+        File::create(&wine).expect("create wine");
+
+        assert!(!backend_available(&wine, &DxBackend::D3dmetal));
+
+        let payload = root.join("lib/apple_gptk/external/libd3dshared.dylib");
+        fs::create_dir_all(payload.parent().expect("payload parent"))
+            .expect("create payload parent");
+        File::create(payload).expect("create D3DMetal payload");
+
+        assert!(backend_available(&wine, &DxBackend::D3dmetal));
         fs::remove_dir_all(root).expect("remove test runtime");
     }
 }

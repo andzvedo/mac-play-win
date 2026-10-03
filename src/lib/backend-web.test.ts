@@ -103,6 +103,39 @@ describe("WebPonteBackend", () => {
     await expect(backend.launchGame(game.id)).rejects.toMatchObject({
       code: "invalid_exe",
     });
+    await expect(backend.listLaunchAttempts(game.id)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "failed",
+          failure: expect.objectContaining({ code: "invalid_exe" }),
+        }),
+      ]),
+    );
+  });
+
+  it("regista a tentativa simulada e a interrupção no histórico", async () => {
+    vi.useFakeTimers();
+    const backend = new WebPonteBackend();
+    const game = await backend.addGame({
+      name: "",
+      folderPath: "/Games/Hades",
+      args: "-windowed",
+    });
+    const launchPromise = backend.launchGame(game.id);
+    await vi.runAllTimersAsync();
+    const running = await launchPromise;
+    expect(running.status).toBe("running");
+    expect(running.args).toEqual(["-windowed"]);
+
+    const stopPromise = backend.stopGame(game.id);
+    await vi.runAllTimersAsync();
+    await stopPromise;
+    const attempts = await backend.listLaunchAttempts(game.id);
+    expect(attempts[0]).toMatchObject({
+      id: running.id,
+      status: "interrupted",
+      failure: { code: "stopped_by_user", retryable: true },
+    });
   });
 
   it("recriar prefixo regista o wipe simulado", async () => {

@@ -4,10 +4,15 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::runtimes::resolve_wine;
-use crate::setup::{guess_engine, prefix_has_dxvk, recommended_stack_for_engine};
+use crate::runtimes::{backend_available, resolve_wine};
+use crate::setup::{
+    args_force_dx11, game_requires_d3d12, guess_engine, prefix_has_dxvk, recommended_stack_for_game,
+};
 use crate::storage::expand_home;
-use crate::types::{CheckStatus, DxBackend, Game, GamePreflight, PreflightCheck, PreflightStatus};
+use crate::types::{
+    CheckStatus, DxBackend, Game, GamePreflight, PreflightCheck, PreflightStatus, Runtime,
+    RuntimeKind,
+};
 
 fn check(
     id: &str,
@@ -87,12 +92,20 @@ fn status_for(checks: &[PreflightCheck]) -> PreflightStatus {
     }
 }
 
+fn validated_d3d12_profile(game: &Game, runtime: Option<&Runtime>) -> bool {
+    game.dx_backend == DxBackend::D3dmetal
+        && runtime.is_some_and(|runtime| {
+            matches!(runtime.kind, RuntimeKind::Gptk | RuntimeKind::Crossover)
+                && backend_available(Path::new(&runtime.wine64_path), &DxBackend::D3dmetal)
+        })
+}
+
 pub fn inspect(game: &Game) -> GamePreflight {
     let executable = expand_home(&game.exe_path);
     let bytes = file_bytes(&executable).unwrap_or_default();
     let machine = machine(&bytes);
     let engine = guess_engine(&executable);
-    let (recommended_runtime, recommended_backend) = recommended_stack_for_engine(&engine);
+    let (recommended_runtime, recommended_backend) = recommended_stack_for_game(game);
     let mut checks = Vec::new();
 
     if bytes.is_empty() {
@@ -181,7 +194,11 @@ pub fn inspect(game: &Game) -> GamePreflight {
             "runtime",
             "Runtime selecionado",
             CheckStatus::Pass,
-            format!("{} em {}.", runtime.label, runtime.wine64_path),
+            if runtime.kind == RuntimeKind::Gptk {
+                format!("GPTK + D3DMetal validados em {}.", runtime.wine64_path)
+            } else {
+                format!("{} em {}.", runtime.label, runtime.wine64_path)
+            },
             None,
         ),
         None => check(
@@ -193,7 +210,24 @@ pub fn inspect(game: &Game) -> GamePreflight {
         ),
     });
 
-    if has_import(&bytes, b"d3d12.dll") {
+    let imports_d3d12 = has_import(&bytes, b"d3d12.dll");
+    if imports_d3d12 && args_force_dx11(&game.args) {
+        checks.push(check(
+            "graphics-api",
+            "API gráfica",
+            CheckStatus::Warning,
+            "O executável importa D3D12, mas o perfil força D3D11. O Ponte permitirá a tentativa pelo backend atual.",
+            Some("Se o jogo ignorar -dx11, remova o argumento e use GPTK/CrossOver com D3DMetal validado."),
+        ));
+    } else if game_requires_d3d12(game) && validated_d3d12_profile(game, runtime.as_ref()) {
+        checks.push(check(
+            "graphics-api",
+            "API gráfica",
+            CheckStatus::Pass,
+            "D3D12 coberto por um perfil GPTK/CrossOver com D3DMetal validado.",
+            None,
+        ));
+    } else if game_requires_d3d12(game) {
         checks.push(check(
             "graphics-api",
             "API gráfica",
@@ -259,7 +293,7 @@ pub fn inspect(game: &Game) -> GamePreflight {
         )
     });
 
-    if recommended_backend == DxBackend::Dxvk
+    if game.dx_backend == DxBackend::Dxvk
         && game.prefix_status == crate::types::PrefixStatus::Ready
         && !prefix_has_dxvk(&prefix)
     {

@@ -79,7 +79,7 @@ Uso:
 Opções:
   --dev         Depois das dependências, abre o Ponte em modo desenvolvimento
   --web         Só a interface no navegador (Iniciar fica simulado)
-  --skip-wine   Não instala o WineHQ Stable
+  --skip-wine   Não instala Wine durante o setup local
   --help        Mostra esta ajuda
 
 O Ponte não baixa jogos. Precisa de um .exe que já esteja no disco.
@@ -255,13 +255,9 @@ ensure_wine() {
     ok "Wine Staging instalado (melhor DirectX em Apple Silicon)"
     return
   fi
-  warn "wine@staging falhou. A tentar wine-stable (só WineD3D — jogos D3D11 podem falhar)…"
-  if brew install --cask --no-quarantine wine-stable; then
-    ok "WineHQ Stable instalado"
-    return
-  fi
-  warn "Não deu para instalar o Wine automaticamente."
-  warn "Instale um wine64 (GPTK, Gcenx ou CrossOver) e aponte o binário em Ajustes."
+  warn "Não deu para instalar o Wine Staging pelo Homebrew."
+  warn "O Ponte pode instalar o Wine Staging gerenciado ao preparar o primeiro jogo."
+  warn "GPTK, Gcenx e CrossOver instalados manualmente também são detetados."
 }
 
 install_npm_deps() {
@@ -311,7 +307,7 @@ run_mode() {
     app)
       step "Compilar e instalar o Ponte"
       log "${DIM}A primeira compilação nativa pode levar vários minutos.${RESET}"
-      npm run tauri:build
+      npm run tauri:build:app
       install_app
       if current="$(find_wine)"; then
         ok "Wine detectado: $current"
